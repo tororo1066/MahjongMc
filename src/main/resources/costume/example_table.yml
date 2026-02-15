@@ -1,0 +1,9 @@
+tile:
+  offset:
+    fixed: 0
+    list:
+      - 0,0,0
+
+mahjongTable:
+  material: BLAZE_ROD
+  modelData: 1

@@ -1,0 +1,11 @@
+defaultMaterial: STICK
+defaultModelData: 1
+
+onSpawn:
+  - class: ...
+
+onHover:
+  - class: ...
+
+onDiscard:
+  - class: ...

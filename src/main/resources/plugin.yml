@@ -1,0 +1,8 @@
+name: MahjongMc
+main: tororo1066.mahjongmc.MahjongMc
+version: 1.0
+api-version: 1.20
+author: tororo_1066
+
+depend:
+  - NMSUtils
