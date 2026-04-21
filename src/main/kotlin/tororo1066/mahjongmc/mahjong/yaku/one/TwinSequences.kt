@@ -3,11 +3,14 @@ package tororo1066.mahjongmc.mahjong.yaku.one
 import tororo1066.mahjongmc.Call.Companion.excludeConcealedKan
 import tororo1066.mahjongmc.game.MahjongInstance
 import tororo1066.mahjongmc.game.PlayerInstance
+import tororo1066.mahjongmc.mahjong.AbstractWinning
 import tororo1066.mahjongmc.mahjong.Meld
 import tororo1066.mahjongmc.mahjong.WinningStructure
+import tororo1066.mahjongmc.mahjong.yaku.three.TwoTwinSequences
 
 object TwinSequences: AbstractOneWinning() {
     override val name: String = "一盃口"
+    override val conflictsWith: Set<AbstractWinning> = setOf(TwoTwinSequences)
 
     override fun check(
         instance: MahjongInstance,

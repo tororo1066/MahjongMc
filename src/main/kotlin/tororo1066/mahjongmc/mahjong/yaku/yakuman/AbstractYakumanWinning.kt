@@ -6,7 +6,7 @@ import tororo1066.mahjongmc.mahjong.AbstractWinning
 import tororo1066.mahjongmc.mahjong.WinningStructure
 
 abstract class AbstractYakumanWinning: AbstractWinning() {
-    override val yakumanValue: Int = 1
+    open val yakumanValue: Int = 1
 
     override fun getHan(
         instance: MahjongInstance,

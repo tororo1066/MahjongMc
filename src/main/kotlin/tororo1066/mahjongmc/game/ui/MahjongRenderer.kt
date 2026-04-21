@@ -1,9 +1,7 @@
 package tororo1066.mahjongmc.game.ui
 
 import com.github.shynixn.mccoroutine.bukkit.minecraftDispatcher
-import com.github.shynixn.mccoroutine.bukkit.ticks
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -14,15 +12,18 @@ import tororo1066.mahjongmc.Call
 import tororo1066.mahjongmc.MahjongMc
 import tororo1066.mahjongmc.costume.EffectCostume
 import tororo1066.mahjongmc.costume.MahjongTableCostume
+import tororo1066.mahjongmc.costume.RichiStickCostume
 import tororo1066.mahjongmc.costume.TileCostume
 import tororo1066.mahjongmc.costume.TileStateRenderType
 import tororo1066.mahjongmc.enums.Position
 import tororo1066.mahjongmc.game.MahjongInstance
 import tororo1066.mahjongmc.game.PlayerInstance
+import tororo1066.mahjongmc.game.RyukyokuType
 import tororo1066.mahjongmc.game.ui.MahjongDisplays.RICHI_CANCEL_DISPLAY
 import tororo1066.mahjongmc.game.ui.MahjongDisplays.CHOICE_CANCEL_DISPLAY
 import tororo1066.mahjongmc.game.ui.MahjongDisplays.CHOICE_DISPLAY
 import tororo1066.mahjongmc.game.ui.MahjongDisplays.POSITION_DISPLAY
+import tororo1066.mahjongmc.game.ui.MahjongDisplays.RICHI_STICK_DISPLAY
 import tororo1066.mahjongmc.game.ui.MahjongDisplays.RYUKYOKU_DISPLAY
 import tororo1066.mahjongmc.game.ui.MahjongDisplays.SCORE_CHANGE_DISPLAY
 import tororo1066.mahjongmc.game.ui.MahjongDisplays.STATE_DISPLAY
@@ -32,7 +33,7 @@ import tororo1066.mahjongmc.game.ui.MahjongDisplays.TIME_DISPLAY
 import tororo1066.mahjongmc.game.ui.MahjongDisplays.WINNING_DISPLAY
 import tororo1066.mahjongmc.game.ui.MahjongDisplays.appendSuffix
 import tororo1066.mahjongmc.mahjong.AbstractWinning
-import tororo1066.mahjongmc.mahjong.WinningStructure
+import tororo1066.mahjongmc.mahjong.WinningType
 import tororo1066.mahjongmc.tile.Tile
 import tororo1066.mahjongmc.tile.TileSpawnType
 import tororo1066.tororopluginapi.SJavaPlugin
@@ -74,12 +75,14 @@ class MahjongRenderer(
         tasks.joinAll()
     }
 
-    fun spawnTile(
+    fun asyncSpawnTile(
         player: PlayerInstance,
         tile: Tile,
         index: Int,
         lastTile: Boolean = false,
-        onInteract: (context: IActionContext) -> Unit
+        onInteract: (context: IActionContext) -> Unit,
+        onHover: (context: IActionContext) -> Unit,
+        onUnhover: (context: IActionContext) -> Unit
     ): Job {
 
         val tasks = mutableListOf<Job>()
@@ -121,9 +124,19 @@ class MahjongRenderer(
                 if (throwable == null) {
                     if (samePlayer) {
                         MahjongMc.injectOnInteract(
-                            receiver.publicActionContext,
+                            player.publicActionContext,
                             display,
                             onInteract
+                        )
+                        MahjongMc.injectOnHover(
+                            player.publicActionContext,
+                            display,
+                            onHover
+                        )
+                        MahjongMc.injectOnUnhover(
+                            player.publicActionContext,
+                            display,
+                            onUnhover
                         )
                     }
                 }
@@ -136,27 +149,32 @@ class MahjongRenderer(
         }
     }
 
-    suspend fun spawnPrepareTiles(range: IntRange, onInteract: (player: PlayerInstance, tile: Tile) -> Unit) {
-        val tasks = mutableListOf<Job>()
-
-        instance.players.forEach { player ->
-            range.forEach { index ->
-                val tile = player.tiles[index]
-                val spawnTileTask = spawnTile(
-                    tile = tile,
-                    index = index,
-                    player = player,
-                    lastTile = false
-                ) { context ->
-                    if (context.target?.uniqueId != player.uuid) return@spawnTile
-                    onInteract(player, tile)
+    fun asyncHoverTile(player: PlayerInstance, tile: Tile): Job {
+        val costume = player.getCostume<TileCostume>()
+        return MahjongMc.runActions(
+            costume.getOnHover(),
+            player.createContext(instance).apply {
+                location = player.position.getCenterFacingLocation()
+                prepareParameters.let {
+                    it["tile"] = tile.parameters()
+                    it["display"] = TILE_DISPLAY.appendSuffix(tile.uuid.toString())
                 }
-
-                tasks.add(spawnTileTask)
             }
-        }
+        )
+    }
 
-        tasks.joinAll()
+    fun asyncUnhoverTile(player: PlayerInstance, tile: Tile): Job {
+        val costume = player.getCostume<TileCostume>()
+        return MahjongMc.runActions(
+            costume.getOnUnhover(),
+            player.createContext(instance).apply {
+                location = player.position.getCenterFacingLocation()
+                prepareParameters.let {
+                    it["tile"] = tile.parameters()
+                    it["display"] = TILE_DISPLAY.appendSuffix(tile.uuid.toString())
+                }
+            }
+        )
     }
 
     suspend fun spawnDeadWallTiles() {
@@ -242,6 +260,15 @@ class MahjongRenderer(
                 } else {
                     false
                 }
+            }
+        }
+    }
+
+    suspend fun removeAllDisplays() {
+        withContext(SJavaPlugin.plugin.minecraftDispatcher) {
+            instance.players.forEach { player ->
+                player.publicActionContext.elements.values.forEach { it.remove() }
+                player.publicActionContext.elements.clear()
             }
         }
     }
@@ -424,6 +451,14 @@ class MahjongRenderer(
                 "display" to TILE_DISPLAY.appendSuffix(tile.uuid.toString())
             )
 
+            val revealTask = MahjongMc.runActions(
+                costume.getOnRevealBonusTile(),
+                receiver.createContext(instance).apply {
+                    location = tileLocation
+                    prepareParameters["tile"] = tile.parameters()
+                }
+            )
+
             val renderTask = MahjongMc.runActions(
                 tileCostume.getOnRender(),
                 receiver.createContext(instance).apply {
@@ -440,7 +475,7 @@ class MahjongRenderer(
                 }
             )
 
-            tasks.addAll(listOf(renderTask, moveTask))
+            tasks.addAll(listOf(revealTask, renderTask, moveTask))
         }
 
         return instance.scope.launch {
@@ -456,6 +491,8 @@ class MahjongRenderer(
         beforeTiles: List<Tile>,
         discardTile: Tile?
     ) {
+        val effectCostume = caller.getCostume<EffectCostume>()
+
         val tasks = mutableListOf<Job>()
 
         instance.players.forEach { receiver ->
@@ -464,13 +501,12 @@ class MahjongRenderer(
             val isCaller = receiver == caller
             val isDiscardedPlayer = receiver == discardPlayer
 
-            val receiverTasks = mutableListOf<Job>()
-
             val beforeTiles = if (isCaller) {
                 beforeTiles
             } else {
                 receiver.otherPlayerDisplayTiles[caller.uuid]?.toList() ?: listOf()
             }
+
             val locations = costume.getCallTileLocations(
                 center = centerLocation,
                 call = call,
@@ -478,30 +514,58 @@ class MahjongRenderer(
                 position = step,
                 dealerPosition = instance.dealerPosition
             )
-            locations.forEach { (tile, tileLocation) ->
 
-                val displayTile = if (tile == discardTile) {
-                    if (isDiscardedPlayer) {
-                        tile
-                    } else {
-                        receiver.otherPlayerDisplayDiscard.getOrPut(discardPlayer.uuid) { mutableListOf() }
-                            .removeLast()
-                            .copyTileInfo(tile)
+            val task = instance.scope.launch {
+                MahjongMc.runActions(
+                    when (call.type) {
+                        Call.Type.PON -> effectCostume.getPonEffects()
+                        Call.Type.CHI -> effectCostume.getChiEffects()
+                        Call.Type.KAN, Call.Type.CONCEALED_KAN, Call.Type.LATE_KAN -> effectCostume.getKanEffects()
+                    },
+                    receiver.createContext(instance).apply {
+                        location = receiver.position.getCenterFacingLocation()
                     }
-                } else {
-                    if (isCaller) {
-                        tile
+                ).join()
+
+                val receiverTasks = mutableListOf<Job>()
+
+                locations.forEach { (tile, tileLocation) ->
+
+                    val displayTile = if (tile == discardTile) {
+                        if (isDiscardedPlayer) {
+                            tile
+                        } else {
+                            receiver.otherPlayerDisplayDiscard.getOrPut(discardPlayer.uuid) { mutableListOf() }
+                                .removeLast()
+                                .copyTileInfo(tile)
+                        }
                     } else {
-                        val tiles = receiver.otherPlayerDisplayTiles.getOrPut(caller.uuid) { mutableListOf() }
-                        tiles.removeAt(Random.nextInt(tiles.size)).copyTileInfo(tile)
+                        if (isCaller) {
+                            tile
+                        } else {
+                            val tiles = receiver.otherPlayerDisplayTiles.getOrPut(caller.uuid) { mutableListOf() }
+                            tiles.removeAt(Random.nextInt(tiles.size)).copyTileInfo(tile)
+                        }
                     }
-                }
 
-                val tileDisplay = TILE_DISPLAY.appendSuffix(displayTile.uuid.toString())
+                    val tileDisplay = TILE_DISPLAY.appendSuffix(displayTile.uuid.toString())
 
-                if ((!isDiscardedPlayer && tile == discardTile) || (!isCaller && tile != discardTile)) {
-                    val renderTask = MahjongMc.runActions(
-                        tileCostume.getOnRender(),
+                    if ((!isDiscardedPlayer && tile == discardTile) || (!isCaller && tile != discardTile)) {
+                        val renderTask = MahjongMc.runActions(
+                            tileCostume.getOnRender(),
+                            receiver.createContext(instance).apply {
+                                location = tileLocation
+                                prepareParameters.let {
+                                    it["tile"] = displayTile.parameters()
+                                    it["display"] = tileDisplay
+                                }
+                            }
+                        )
+                        receiverTasks.add(renderTask)
+                    }
+
+                    val task = MahjongMc.runActions(
+                        tileCostume.getOnMove(),
                         receiver.createContext(instance).apply {
                             location = tileLocation
                             prepareParameters.let {
@@ -510,27 +574,14 @@ class MahjongRenderer(
                             }
                         }
                     )
-                    receiverTasks.add(renderTask)
+                    receiverTasks.add(task)
                 }
 
-                val task = MahjongMc.runActions(
-                    tileCostume.getOnMove(),
-                    receiver.createContext(instance).apply {
-                        location = tileLocation
-                        prepareParameters.let {
-                            it["tile"] = displayTile.parameters()
-                            it["display"] = tileDisplay
-                        }
-                    }
-                )
-                receiverTasks.add(task)
-            }
-
-            val combinedTask = instance.scope.launch {
                 receiverTasks.joinAll()
                 sortTilesAnimation(caller, receiver, beforeTiles).join()
             }
-            tasks.add(combinedTask)
+
+            tasks.add(task)
         }
 
         tasks.joinAll()
@@ -638,7 +689,7 @@ class MahjongRenderer(
         }
     }
 
-    enum class WinningType {
+    enum class WinningBy {
         TSUMO,
         RON,
         NAGASHI_MANGAN
@@ -648,8 +699,10 @@ class MahjongRenderer(
         player: PlayerInstance,
         winnings: List<AbstractWinning>,
         winningTile: Tile?,
+        fu: Int?,
         score: Int,
-        type: WinningType,
+        winningType: WinningType,
+        winningBy: WinningBy,
         getHan: AbstractWinning.() -> Int?
     ) {
         val tiles = (player.tiles + player.calls.flatMap { it.tiles }).toMutableList()
@@ -672,14 +725,16 @@ class MahjongRenderer(
             val task = MahjongMc.runActions(
                 costume.getOnWinning(),
                 receiver.createContext(instance).apply {
-                    location = player.position.getCenterFacingLocation()
+                    location = receiver.position.getCenterFacingLocation()
                     prepareParameters.let {
                         it["display"] = WINNING_DISPLAY
                         it["tiles"] = tiles.map { tile -> tile.parameters() }
                         it["winningTile"] = winningTile?.parameters()
                         it["winnings"] = winningsParameters
+                        it["fu"] = fu
                         it["score"] = score
-                        it["type"] = type.name.lowercase()
+                        it["winningType"] = winningType.name.lowercase()
+                        it["winningBy"] = winningBy.name.lowercase()
                         it["player"] = player.uuid.toString()
                     }
                 }
@@ -688,12 +743,10 @@ class MahjongRenderer(
             tasks.add(task)
 
             tiles.forEachIndexed { index, tile ->
-                val isLastTile = type != WinningType.NAGASHI_MANGAN && index == tiles.size - 1
+                val isLastTile = winningBy != WinningBy.NAGASHI_MANGAN && index == tiles.size - 1
                 val display = WINNING_DISPLAY.appendSuffix(tile.uuid.toString())
                 val translation = costume.getWinningTileTranslation(
                     index = index,
-                    position = player.position,
-                    dealerPosition = instance.dealerPosition,
                     lastTile = isLastTile
                 )
                 val task = MahjongMc.runActions(
@@ -702,7 +755,7 @@ class MahjongRenderer(
                         location = costume.getWinningTileLocation(
                             center = centerLocation,
                             index = index,
-                            position = player.position,
+                            position = receiver.position,
                             dealerPosition = instance.dealerPosition,
                             lastTile = isLastTile
                         )
@@ -722,7 +775,6 @@ class MahjongRenderer(
         }
 
         tasks.joinAll()
-        delay(60.ticks)
 
         instance.players.forEach { receiver ->
             removeDisplays(receiver, WINNING_DISPLAY)
@@ -755,7 +807,6 @@ class MahjongRenderer(
         }
 
         tasks.joinAll()
-        delay(60.ticks)
 
         instance.players.forEach { receiver ->
             removeDisplays(receiver, SCORE_CHANGE_DISPLAY)
@@ -865,7 +916,6 @@ class MahjongRenderer(
         player: PlayerInstance,
         receivers: List<PlayerInstance> = instance.players,
         tiles: List<Tile> = player.tiles,
-        isTsumo: Boolean = false,
         hidden: Boolean = false
     ): Job {
         val tasks = mutableListOf<Job>()
@@ -892,7 +942,8 @@ class MahjongRenderer(
                     tileIndex = index,
                     position = player.position,
                     dealerPosition = instance.dealerPosition,
-                    lastTile = isTsumo && index == tiles.size - 1
+                    lastTile = index == tiles.size - 1 && index % 3 == 1
+//                    lastTile = isTsumo && index == tiles.size - 1
                 ).setPitchL(if (hidden) 90f else -90f)
 
                 if (!samePlayer) {
@@ -930,12 +981,20 @@ class MahjongRenderer(
         }
     }
 
-    suspend fun renderRyukyoku(tenpaiTiles: Map<PlayerInstance, List<Tile>>) {
+    suspend fun renderRyukyoku(type: RyukyokuType) {
         // 手牌を倒す
-        instance.players.map { player ->
+        val layTilesDownPlayers = when (type) {
+            is RyukyokuType.Normal -> type.tenpaiTiles.keys.map { it to !type.tenpaiTiles.containsKey(it) }
+            is RyukyokuType.NineDifferentTerminals -> listOf(type.player to false)
+            is RyukyokuType.FourPlayersRichi -> instance.players.map { it to false }
+            is RyukyokuType.DiscardingTheSameWind -> listOf()
+            is RyukyokuType.MeldedFourFours -> listOf()
+        }
+
+        layTilesDownPlayers.map { (player, hidden) ->
             asyncLayTilesDown(
                 player = player,
-                hidden = !tenpaiTiles.containsKey(player)
+                hidden = hidden
             )
         }.joinAll()
 
@@ -947,71 +1006,96 @@ class MahjongRenderer(
                     location = player.position.getCenterFacingLocation()
                     prepareParameters.let {
                         it["display"] = RYUKYOKU_DISPLAY
-                        it["tenpaiPlayers"] = tenpaiTiles.entries.associate { (player, tiles) ->
-                            player.uuid.toString() to tiles.map { tile -> tile.parameters() }
-                        }
+                        it["type"] = type.javaClass.simpleName
                     }
                 }
             )
         }.joinAll()
 
-        tenpaiTiles.flatMap { (player, tiles) ->
-            instance.players.flatMap { receiver ->
-                val costume = receiver.getCostume<MahjongTableCostume>()
-                val tileCostume = receiver.getCostume<TileCostume>()
-                val tenpaiTileLocations = costume.getRyukyokuTenpaiTileLocations(
-                    center = centerLocation,
-                    size = tiles.size,
-                    position = player.position,
-                    dealerPosition = instance.dealerPosition
-                )
+        if (type is RyukyokuType.Normal) {
+            type.tenpaiTiles.flatMap { (player, tiles) ->
+                instance.players.flatMap { receiver ->
+                    val costume = receiver.getCostume<MahjongTableCostume>()
+                    val tileCostume = receiver.getCostume<TileCostume>()
+                    val tenpaiTileLocations = costume.getRyukyokuTenpaiTileLocations(
+                        center = centerLocation,
+                        size = tiles.size,
+                        position = player.position,
+                        dealerPosition = instance.dealerPosition
+                    )
 
-                val tasks = mutableListOf<Job>()
+                    val tasks = mutableListOf<Job>()
 
-                val frameTask = MahjongMc.runActions(
-                    costume.getRyukyokuTenpaiTileFrameDisplay(),
-                    receiver.createContext(instance).apply {
-                        location = costume.getRyukyokuTenpaiTileFixedLocation(
-                            center = centerLocation,
-                            position = player.position,
-                            dealerPosition = instance.dealerPosition
-                        )
-                        prepareParameters.let {
-                            it["display"] = RYUKYOKU_DISPLAY.appendSuffix("${player.uuid}_frame")
-                            it["size"] = tiles.size
-                        }
-                    }
-                )
-
-                tasks.add(frameTask)
-
-                tiles.forEachIndexed { index, tile ->
-                    val location = tenpaiTileLocations[index]
-                    val display = RYUKYOKU_DISPLAY.appendSuffix(tile.uuid.toString())
-                    val spawnTask = MahjongMc.runActions(
-                        tileCostume.getOnSpawn(),
+                    val frameTask = MahjongMc.runActions(
+                        costume.getRyukyokuTenpaiTileFrameDisplay(),
                         receiver.createContext(instance).apply {
-                            this.location = location
+                            location = costume.getRyukyokuTenpaiTileFixedLocation(
+                                center = centerLocation,
+                                position = player.position,
+                                dealerPosition = instance.dealerPosition
+                            )
                             prepareParameters.let {
-                                it["tile"] = tile.parameters()
-                                it["display"] = display
-                                it["type"] = TileSpawnType.TENPAI.lowercase()
-                                it["hidden"] = false
+                                it["display"] = RYUKYOKU_DISPLAY.appendSuffix("${player.uuid}_frame")
+                                it["size"] = tiles.size
                             }
                         }
                     )
 
-                    tasks.add(spawnTask)
+                    tasks.add(frameTask)
+
+                    tiles.forEachIndexed { index, tile ->
+                        val location = tenpaiTileLocations[index]
+                        val display = RYUKYOKU_DISPLAY.appendSuffix(tile.uuid.toString())
+                        val spawnTask = MahjongMc.runActions(
+                            tileCostume.getOnSpawn(),
+                            receiver.createContext(instance).apply {
+                                this.location = location
+                                this.prepareParameters.let {
+                                    it["tile"] = tile.parameters()
+                                    it["display"] = display
+                                    it["type"] = TileSpawnType.TENPAI.lowercase()
+                                    it["hidden"] = false
+                                }
+                            }
+                        )
+
+                        tasks.add(spawnTask)
+                    }
+
+                    tasks
                 }
+            }.joinAll()
+        }
 
-                tasks
-            }
-        }.joinAll()
-
-        delay(60.ticks)
+//        delay(60.ticks)
 
         instance.players.forEach { receiver ->
             removeDisplays(receiver, RYUKYOKU_DISPLAY)
+        }
+    }
+
+    fun asyncRenderRichi(
+        player: PlayerInstance,
+        isDoubleRichi: Boolean
+    ): Job {
+        val effectCostume = player.getCostume<EffectCostume>()
+        val tasks = mutableListOf<Job>()
+        instance.players.forEach { receiver ->
+            val effectTask = MahjongMc.runActions(
+                effectCostume.getRichiEffects(),
+                receiver.createContext(instance).apply {
+                    location = player.position.getCenterFacingLocation()
+                    prepareParameters.let {
+                        it["isDoubleRichi"] = isDoubleRichi
+                    }
+                }
+            )
+
+            tasks.add(effectTask)
+        }
+
+        return instance.scope.launch {
+            tasks.joinAll()
         }
     }
 
@@ -1056,8 +1140,7 @@ class MahjongRenderer(
                 asyncLayTilesDown(
                     player = player,
                     receivers = listOf(receiver),
-                    tiles = player.tiles,
-                    isTsumo = true
+                    tiles = player.tiles
                 ).join()
             })
         }
@@ -1085,49 +1168,77 @@ class MahjongRenderer(
             }
             val display = TILE_DISPLAY.appendSuffix(targetTile.uuid.toString())
 
-            val callEffectTasks = players.map { player ->
-                val effectCostume = player.getCostume<EffectCostume>()
-                MahjongMc.runActions(
-                    effectCostume.getRonEffectsCall(),
+            tasks.add(instance.scope.launch {
+                val callEffectTasks = players.map { player ->
+                    val effectCostume = player.getCostume<EffectCostume>()
+                    MahjongMc.runActions(
+                        effectCostume.getRonEffectsCall(),
+                        receiver.createContext(instance).apply {
+                            location = player.position.getCenterFacingLocation()
+                            prepareParameters.let {
+                                it["tile"] = winningTile.parameters()
+                                it["display"] = display
+                            }
+                        }
+                    )
+                }
+
+                callEffectTasks.joinAll()
+
+                val effectTask = MahjongMc.runActions(
+                    effectCostume.getRonEffects(),
                     receiver.createContext(instance).apply {
-                        location = player.position.getCenterFacingLocation()
+                        location = costume.getDiscardLocation(
+                            center = centerLocation,
+                            discardIndex = targetPlayer.discard.size - 1,
+                            position = targetPlayer.position,
+                            dealerPosition = instance.dealerPosition
+                        )
                         prepareParameters.let {
                             it["tile"] = winningTile.parameters()
                             it["display"] = display
                         }
                     }
                 )
-            }
 
-            val effectTask = MahjongMc.runActions(
-                effectCostume.getRonEffects(),
-                receiver.createContext(instance).apply {
-                    location = costume.getDiscardLocation(
-                        center = centerLocation,
-                        discardIndex = targetPlayer.discard.size - 1,
-                        position = targetPlayer.position,
-                        dealerPosition = instance.dealerPosition
-                    )
-                    prepareParameters.let {
-                        it["tile"] = winningTile.parameters()
-                        it["display"] = display
-                    }
-                }
-            )
-
-            tasks.add(instance.scope.launch {
-                callEffectTasks.joinAll()
                 effectTask.join()
                 asyncLayTilesDown(
                     player = firstPlayer,
                     receivers = listOf(receiver),
-                    tiles = firstPlayer.tiles,
-                    isTsumo = false
+                    tiles = firstPlayer.tiles
                 ).join()
             })
         }
 
         tasks.joinAll()
+    }
+
+    fun asyncRenderRichiStick(
+        player: PlayerInstance
+    ): Job {
+        val richiStickCostume = player.getCostume<RichiStickCostume>()
+
+        val tasks = mutableListOf<Job>()
+
+        instance.players.forEach { receiver ->
+            val costume = receiver.getCostume<MahjongTableCostume>()
+            val task = MahjongMc.runActions(
+                richiStickCostume.getOnRenderRichiStick(),
+                receiver.createContext(instance).apply {
+                    location = costume.getRichiStickLocation(
+                        center = centerLocation,
+                        position = player.position,
+                        dealerPosition = instance.dealerPosition
+                    )
+                    prepareParameters["display"] = RICHI_STICK_DISPLAY.appendSuffix(player.uuid.toString())
+                }
+            )
+            tasks.add(task)
+        }
+
+        return instance.scope.launch {
+            tasks.joinAll()
+        }
     }
 
     fun asyncRenderPosition(): Job {
@@ -1144,6 +1255,7 @@ class MahjongRenderer(
                             it["display"] = POSITION_DISPLAY.appendSuffix(player.uuid.toString())
                             it["player"] = player.uuid.toString()
                             it["position"] = player.position.displayName
+                            it["isDealer"] = player.position == instance.dealerPosition
                         }
                     }
                 )
@@ -1161,9 +1273,9 @@ class MahjongRenderer(
         val tasks = mutableListOf<Job>()
 
         val parameters = mapOf(
-            "round" to (instance.round - 1) % 4 + 1,
-            "roundWind" to instance.roundWind.name,
-            "dealerPosition" to instance.dealerPosition.name,
+            "round" to (instance.round - 1) % instance.settings.playerSettings.seats + 1,
+            "roundWind" to instance.roundWind.displayName,
+            "dealerPosition" to instance.dealerPosition.displayName,
             "honba" to instance.continueCount,
             "richiSticks" to instance.richiSticks,
             "remainingTiles" to instance.generalTiles.size

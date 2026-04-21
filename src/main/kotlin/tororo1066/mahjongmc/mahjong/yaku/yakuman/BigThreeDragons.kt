@@ -16,22 +16,23 @@ object BigThreeDragons: AbstractYakumanResponsiblePaymentWinning() {
         winningStructure: WinningStructure,
         isTsumo: Boolean
     ): Boolean {
-        val triplets = winningStructure.winningTiles.melds.filter {
-            it is Meld.Triplet || it is Meld.Quadruplet
+        return HonorTiles.DRAGONS.all { wind ->
+            winningStructure.winningTiles.melds.any { meld ->
+                meld.tiles.all { it.honor == wind }
+            }
         }
-        return triplets.any { it.tiles.first().honor == HonorTiles.WHITE }
-                && triplets.any { it.tiles.first().honor == HonorTiles.GREEN }
-                && triplets.any { it.tiles.first().honor == HonorTiles.RED }
     }
 
     // 責任払いの判定
-    override fun checkPao(player: PlayerInstance): Position? {
+    override fun checkTarget(player: PlayerInstance): Position? {
         val calls = player.calls
         val dragonCalls = calls.filter { call ->
             call.tiles.first().honor.isDragon()
         }
 
         if (dragonCalls.size != 3) return null
-        return dragonCalls.last().target
+        val target = dragonCalls.last().target
+        if (player.position == target) return null
+        return target
     }
 }

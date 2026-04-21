@@ -1,14 +1,11 @@
-package tororo1066.mahjongmc.mahjong.yaku.one
+package tororo1066.mahjongmc.mahjong.yaku.yakuman
 
 import tororo1066.mahjongmc.game.MahjongInstance
 import tororo1066.mahjongmc.game.PlayerInstance
-import tororo1066.mahjongmc.mahjong.AbstractWinning
 import tororo1066.mahjongmc.mahjong.WinningStructure
-import tororo1066.mahjongmc.mahjong.yaku.two.DoubleRichi
 
-object Richi: AbstractOneWinning() {
-    override val name: String = "立直"
-    override val conflictsWith: Set<AbstractWinning> = setOf(DoubleRichi)
+object AllTerminals: AbstractYakumanWinning() {
+    override val name: String = "清老頭"
 
     override fun check(
         instance: MahjongInstance,
@@ -16,6 +13,6 @@ object Richi: AbstractOneWinning() {
         winningStructure: WinningStructure,
         isTsumo: Boolean
     ): Boolean {
-        return player.isRichi
+        return winningStructure.winningTiles.tiles.all { it.isTerminal() }
     }
 }

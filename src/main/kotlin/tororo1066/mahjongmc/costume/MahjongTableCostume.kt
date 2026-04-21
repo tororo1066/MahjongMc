@@ -71,9 +71,7 @@ class MahjongTableCostume: AbstractCostume() {
 
     fun getTranslation(
         path: String,
-        index: Int,
-        position: Position,
-        dealerPosition: Position
+        index: Int
     ): Vector {
         val fixedOffset = getOrDefault { it.get3Point("$path.translation.fixed") } ?: Vector(0, 0, 0)
         val offsetList = getOrDefault {
@@ -83,23 +81,32 @@ class MahjongTableCostume: AbstractCostume() {
         }
         val simpleOffset = getOrDefault { it.get3Point("$path.translation.simple") } ?: Vector(0, 0, 0)
 
-        val rotation = position.getRadians(dealerPosition)
-
-        val vector = fixedOffset.rotateAroundY(rotation)
-
         if (offsetList != null) {
             offsetList.getOrNull(index)?.let {
-                return vector.add(it.rotateAroundY(rotation))
+                return fixedOffset.add(it)
             }
         } else {
-            return vector.add(simpleOffset.clone().multiply(index.toDouble()).rotateAroundY(rotation))
+            return fixedOffset.add(simpleOffset.clone().multiply(index.toDouble()))
         }
 
-        return vector
+        return fixedOffset
+
+//        val rotation = position.getRadians(dealerPosition)
+//
+//        val vector = fixedOffset.rotateAroundY(rotation)
+//
+//        if (offsetList != null) {
+//            offsetList.getOrNull(index)?.let {
+//                return vector.add(it.rotateAroundY(rotation))
+//            }
+//        } else {
+//            return vector.add(simpleOffset.clone().multiply(index.toDouble()).rotateAroundY(rotation))
+//        }
+//
+//        return vector
     }
 
     fun getTileLocation(center: Location, tileIndex: Int, position: Position, dealerPosition: Position, lastTile: Boolean = false): Location {
-//        return getPlacementLocation("tile", center, tileIndex, position, dealerPosition)
         val base = getPlacementLocation("tile", center, tileIndex, position, dealerPosition)
 
         val lastTileOffset = if (lastTile) {
@@ -192,6 +199,12 @@ class MahjongTableCostume: AbstractCostume() {
         return location.setYawL(position.getMinecraftYaw(dealerPosition)).setPitchL(if (opened) -90f else 90f)
     }
 
+    fun getOnRevealBonusTile(): List<IAdvancedConfigurationSection> {
+        return getOrDefault {
+            it.getNullableActionList("onRevealBonusTile")
+        } ?: emptyList()
+    }
+
     fun getOnStateChange(): List<IAdvancedConfigurationSection> {
         return getOrDefault {
             it.getNullableActionList("onStateChange")
@@ -269,6 +282,12 @@ class MahjongTableCostume: AbstractCostume() {
     fun getRonDisplay(): List<IAdvancedConfigurationSection> {
         return getOrDefault {
             it.getNullableActionList("action.display.ron")
+        } ?: emptyList()
+    }
+
+    fun getRyukyokuActionDisplay(): List<IAdvancedConfigurationSection> {
+        return getOrDefault {
+            it.getNullableActionList("action.display.ryukyoku")
         } ?: emptyList()
     }
 
@@ -499,7 +518,7 @@ class MahjongTableCostume: AbstractCostume() {
                     currentPosition.x += width
                 }
 
-                addPosition(tile, height / 2, height - width, yawAdjustment = -90f)
+                addPosition(tile, height / 2, (height - width) / 2 - width, yawAdjustment = -90f)
             }
         }
 
@@ -517,6 +536,13 @@ class MahjongTableCostume: AbstractCostume() {
         } ?: emptyList()
     }
 
+    fun getRichiStickLocation(center: Location, position: Position, dealerPosition: Position): Location {
+        val offset = getOrDefault { it.get3Point("richiStick.offset") } ?: Vector(0, 0, 0)
+
+        val rotation = position.getRadians(dealerPosition)
+        return center.clone().add(offset.rotateAroundY(rotation)).setYawL(position.getMinecraftYaw(dealerPosition))
+    }
+
     fun getWinningTileLocation(center: Location, index: Int, position: Position, dealerPosition: Position, lastTile: Boolean): Location {
         val base = getPlacementLocation("winning.tile", center, index, position, dealerPosition)
 
@@ -530,18 +556,15 @@ class MahjongTableCostume: AbstractCostume() {
 
     fun getWinningTileTranslation(
         index: Int,
-        position: Position,
-        dealerPosition: Position,
         lastTile: Boolean
     ): Vector {
-        val base = getTranslation("winning.tile", index, position, dealerPosition)
+        val base = getTranslation("winning.tile", index)
 
         val lastTileOffset = if (lastTile) {
             getOrDefault { it.get3Point("winning.tile.translation.last") } ?: Vector(0, 0, 0)
         } else Vector(0, 0, 0)
 
-        val rotation = position.getRadians(dealerPosition)
-        return base.add(lastTileOffset.rotateAroundY(rotation))
+        return base.add(lastTileOffset)
     }
 
     fun getOnWinning(): List<IAdvancedConfigurationSection> {
@@ -604,12 +627,14 @@ class MahjongTableCostume: AbstractCostume() {
         } ?: emptyList()
     }
 
-    companion object: CostumeFactory<MahjongTableCostume> {
-        override var default = MahjongMc.displayUtils.loadAdvancedConfiguration(
-            File(SJavaPlugin.plugin.dataFolder, "costume/table/default.yml")
-        )
+    companion object: CostumeFactory<MahjongTableCostume>() {
+        override fun createDefault(): IAdvancedConfigurationSection {
+            return MahjongMc.displayUtils.loadAdvancedConfiguration(
+                File(SJavaPlugin.plugin.dataFolder, "costume/table/default.yml")
+            )
+        }
 
-        override fun create(): MahjongTableCostume {
+        override fun createEmpty(): MahjongTableCostume {
             return MahjongTableCostume()
         }
     }

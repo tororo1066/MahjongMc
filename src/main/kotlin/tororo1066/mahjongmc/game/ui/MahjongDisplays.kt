@@ -1,12 +1,14 @@
 package tororo1066.mahjongmc.game.ui
 
 object MahjongDisplays {
-    const val TABLE_DISPLAY = "table_display"
-    const val STATE_DISPLAY = "state_display"
-    const val POSITION_DISPLAY = "position_display"
-    const val TILE_DISPLAY = "tile_display"
+    const val TABLE_DISPLAY = "display_table"
+    const val STATE_DISPLAY = "display_state"
+    const val POSITION_DISPLAY = "display_position"
+    const val TILE_DISPLAY = "display_tile"
     const val TIME_DISPLAY = "display_time"
+    const val RICHI_STICK_DISPLAY = "display_richi_stick"
     const val WINNING_DISPLAY = "display_winning"
+
     const val ACTION_DISPLAY = "display_action"
     const val SKIP_DISPLAY = "${ACTION_DISPLAY}_skip"
     const val CHOICE_DISPLAY = "${ACTION_DISPLAY}_choice"

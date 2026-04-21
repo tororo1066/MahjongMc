@@ -7,15 +7,27 @@ import java.io.File
 
 class EffectCostume: AbstractCostume() {
 
-    fun getRichiEffects(): List<IAdvancedConfigurationSection> {
+    fun getPonEffects(): List<IAdvancedConfigurationSection> {
         return getOrDefault { config ->
-            config.getNullableActionList("action.richi")
+            config.getNullableActionList("action.pon")
         } ?: emptyList()
     }
 
-    fun getDoubleRichiEffects(): List<IAdvancedConfigurationSection> {
+    fun getChiEffects(): List<IAdvancedConfigurationSection> {
         return getOrDefault { config ->
-            config.getNullableActionList("action.doubleRichi")
+            config.getNullableActionList("action.chi")
+        } ?: emptyList()
+    }
+
+    fun getKanEffects(): List<IAdvancedConfigurationSection> {
+        return getOrDefault { config ->
+            config.getNullableActionList("action.kan")
+        } ?: emptyList()
+    }
+
+    fun getRichiEffects(): List<IAdvancedConfigurationSection> {
+        return getOrDefault { config ->
+            config.getNullableActionList("action.richi")
         } ?: emptyList()
     }
 
@@ -37,12 +49,14 @@ class EffectCostume: AbstractCostume() {
         } ?: emptyList()
     }
 
-    companion object: CostumeFactory<EffectCostume> {
-        override var default = MahjongMc.displayUtils.loadAdvancedConfiguration(
-            File(SJavaPlugin.plugin.dataFolder, "costume/effect/default.yml")
-        )
+    companion object: CostumeFactory<EffectCostume>() {
+        override fun createDefault(): IAdvancedConfigurationSection {
+            return MahjongMc.displayUtils.loadAdvancedConfiguration(
+                File(SJavaPlugin.plugin.dataFolder, "costume/effect/default.yml")
+            )
+        }
 
-        override fun create(): EffectCostume {
+        override fun createEmpty(): EffectCostume {
             return EffectCostume()
         }
     }

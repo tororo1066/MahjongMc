@@ -3,11 +3,14 @@ package tororo1066.mahjongmc.mahjong.yaku.three
 import tororo1066.mahjongmc.Call.Companion.excludeConcealedKan
 import tororo1066.mahjongmc.game.MahjongInstance
 import tororo1066.mahjongmc.game.PlayerInstance
+import tororo1066.mahjongmc.mahjong.AbstractWinning
 import tororo1066.mahjongmc.mahjong.WinningStructure
+import tororo1066.mahjongmc.mahjong.yaku.six.OneSuitOnly
 import tororo1066.mahjongmc.tile.TileType
 
 object OneSuitWithHonors: AbstractThreeWinning() {
     override val name: String = "混一色"
+    override val conflictsWith: Set<AbstractWinning> = setOf(OneSuitOnly)
 
     override fun check(
         instance: MahjongInstance,

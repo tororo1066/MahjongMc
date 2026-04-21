@@ -7,7 +7,7 @@ abstract class AbstractWinning {
 
     abstract val name: String
     open val hasYaku: Boolean = true
-    open val yakumanValue: Int = 0
+    open val conflictsWith: Set<AbstractWinning> = emptySet()
 
     abstract fun check(
         instance: MahjongInstance,
@@ -23,7 +23,7 @@ abstract class AbstractWinning {
         isTsumo: Boolean
     ): Int
 
-    open fun conflictsWith(other: AbstractWinning): Boolean {
-        return false
-    }
+//    open fun conflictsWith(other: AbstractWinning): Boolean {
+//        return false
+//    }
 }

@@ -6,5 +6,6 @@ enum class SelfTileAction {
 //    CONCEALED_KAN,
 //    LATE_KAN,
     KAN,
-    TSUMO
+    TSUMO,
+    RYUKYOKU
 }

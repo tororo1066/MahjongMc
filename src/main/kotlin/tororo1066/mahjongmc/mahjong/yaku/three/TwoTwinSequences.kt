@@ -7,7 +7,7 @@ import tororo1066.mahjongmc.mahjong.Meld
 import tororo1066.mahjongmc.mahjong.WinningStructure
 import tororo1066.mahjongmc.tile.TileType
 
-object TwoEvenElements: AbstractThreeWinning() {
+object TwoTwinSequences: AbstractThreeWinning() {
     override val name: String = "二盃口"
 
     private data class SequenceInfo(val type: TileType, val start: Int)

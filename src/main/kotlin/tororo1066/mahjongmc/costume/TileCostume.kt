@@ -1,6 +1,5 @@
 package tororo1066.mahjongmc.costume
 
-import org.bukkit.configuration.file.YamlConfiguration
 import tororo1066.displaymonitorapi.configuration.IAdvancedConfigurationSection
 import tororo1066.mahjongmc.MahjongMc
 import tororo1066.tororopluginapi.SJavaPlugin
@@ -26,48 +25,32 @@ class TileCostume: AbstractCostume() {
         } ?: emptyList()
     }
 
+    fun getOnHover(): List<IAdvancedConfigurationSection> {
+        return getOrDefault {
+            it.getNullableActionList("onHover")
+        } ?: emptyList()
+    }
+
+    fun getOnUnhover(): List<IAdvancedConfigurationSection> {
+        return getOrDefault {
+            it.getNullableActionList("onUnhover")
+        } ?: emptyList()
+    }
+
     fun renderTileState(): List<IAdvancedConfigurationSection> {
         return getOrDefault {
             it.getNullableActionList("renderTileState")
         } ?: emptyList()
     }
 
-//    fun getOnKuigaeAdd(): List<IAdvancedConfigurationSection> {
-//        return getOrDefault {
-//            it.getNullableActionList("kuigae.onAdd")
-//        } ?: emptyList()
-//    }
-//
-//    fun getOnKuigaeRemove(): List<IAdvancedConfigurationSection> {
-//        return getOrDefault {
-//            it.getNullableActionList("kuigae.onRemove")
-//        } ?: emptyList()
-//    }
-//
-//    fun getOnRichiableAdd(): List<IAdvancedConfigurationSection> {
-//        return getOrDefault {
-//            it.getNullableActionList("richi.onAdd")
-//        } ?: emptyList()
-//    }
-//
-//    fun getOnRichiableAddDenied(): List<IAdvancedConfigurationSection> {
-//        return getOrDefault {
-//            it.getNullableActionList("richi.onAddDenied")
-//        } ?: emptyList()
-//    }
-//
-//    fun getOnRichiableRemove(): List<IAdvancedConfigurationSection> {
-//        return getOrDefault {
-//            it.getNullableActionList("richi.onRemove")
-//        } ?: emptyList()
-//    }
+    companion object: CostumeFactory<TileCostume>() {
+        override fun createDefault(): IAdvancedConfigurationSection {
+            return MahjongMc.displayUtils.loadAdvancedConfiguration(
+                File(SJavaPlugin.plugin.dataFolder, "costume/tile/default.yml")
+            )
+        }
 
-    companion object: CostumeFactory<TileCostume> {
-        override var default = MahjongMc.displayUtils.loadAdvancedConfiguration(
-            File(SJavaPlugin.plugin.dataFolder, "costume/tile/default.yml")
-        )
-
-        override fun create(): TileCostume {
+        override fun createEmpty(): TileCostume {
             return TileCostume()
         }
     }

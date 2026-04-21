@@ -52,6 +52,8 @@ class PlayerInstance {
 
     val publicActionContext by lazy { MahjongMc.createPublicActionContext() }
 
+    val debugPrepareTiles = mutableListOf<Tile>()
+
     inline fun <reified T: AbstractCostume> getCostume(): T {
         return costumes.filterIsInstance<T>().first()
     }
@@ -119,9 +121,10 @@ class PlayerInstance {
         return ponChoices
     }
 
-    fun canChi(tile: Tile, instance: MahjongInstance): Boolean {
+    fun canChi(tile: Tile, instance: MahjongInstance, targetPosition: Position): Boolean {
         // 3人麻雀ではチー不可
         if (instance.settings.playerSettings == PlayerSettings.PLAYERS_3) return false
+        if (position.previous(instance.settings.playerSettings) != targetPosition) return false
         if (isRichi) return false
         // 海底牌はチー不可
         if (instance.generalTiles.isEmpty()) return false
@@ -186,6 +189,7 @@ class PlayerInstance {
         if (isRichi) return false
         // 海底牌はカン不可
         if (instance.generalTiles.isEmpty()) return false
+        if (instance.players.sumOf { it.calls.count { call -> call.isKan() } } >= 4) return false
         return tiles.count {
             it.isSameTile(tile)
         } >= 3
@@ -215,6 +219,7 @@ class PlayerInstance {
     fun canConcealedKan(instance: MahjongInstance): Boolean {
         // 海底牌は暗槓不可
         if (instance.generalTiles.isEmpty()) return false
+        if (instance.players.sumOf { it.calls.count { call -> call.isKan() } } >= 4) return false
 
         val group = tiles.groupBy { it.type to it.number to it.honor }
             .filter { (_, groupedTiles) -> groupedTiles.size >= 4 }
@@ -275,6 +280,7 @@ class PlayerInstance {
     fun canLateKan(instance: MahjongInstance): Boolean {
         // 海底牌は加槓不可
         if (instance.generalTiles.isEmpty()) return false
+        if (instance.players.sumOf { it.calls.count { call -> call.isKan() } } >= 4) return false
 
         for (call in calls) {
             if (call.type == Call.Type.PON) {
@@ -312,7 +318,7 @@ class PlayerInstance {
         val requiredGeneralTiles = instance.settings.playerSettings.seats
         if (instance.generalTiles.size < requiredGeneralTiles) return false
 
-        return WinningManager.richiDiscards(tiles).isNotEmpty()
+        return WinningManager.richiDiscards(tiles, calls).isNotEmpty()
     }
 
     fun canTsumo(instance: MahjongInstance): Boolean {
@@ -346,6 +352,15 @@ class PlayerInstance {
             isTsumo = isTsumo
         ) ?: return false
         return true
+    }
+
+    fun canNineDifferentTerminalsRyukyoku(instance: MahjongInstance): Boolean {
+        if (discard.isNotEmpty()) return false
+        if (instance.players.any { it.calls.isNotEmpty() }) return false
+        val uniqueTerminalsAndHonors = tiles
+            .filter { it.type == TileType.HONORS || it.number == 1 || it.number == 9 }
+            .distinctBy { it.type to it.number to it.honor }
+        return uniqueTerminalsAndHonors.size >= 9
     }
 
     // 喰い替え判定になる牌を取得

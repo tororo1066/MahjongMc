@@ -64,7 +64,7 @@ class MahjongMc: SJavaPlugin(UseOption.SConfig) {
         fun injectOnHover(
             publicActionContext: IPublicActionContext,
             name: String,
-            onHover: (IActionContext) -> CompletableFuture<Unit>
+            onHover: (IActionContext) -> Unit
         ) {
             val element = findDisplayElement(publicActionContext, name) ?: return
             element.onHover = Execute { context ->
@@ -75,7 +75,7 @@ class MahjongMc: SJavaPlugin(UseOption.SConfig) {
         fun injectOnUnhover(
             publicActionContext: IPublicActionContext,
             name: String,
-            onUnhover: (IActionContext) -> CompletableFuture<Unit>
+            onUnhover: (IActionContext) -> Unit
         ) {
             val element = findDisplayElement(publicActionContext, name) ?: return
             element.onUnhover = Execute { context ->

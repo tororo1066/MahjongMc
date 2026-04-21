@@ -8,15 +8,17 @@ abstract class AbstractCostume {
     private var _config: IAdvancedConfigurationSection? = null
     private val factory = this::class.companionObjectInstance as CostumeFactory<*>
 
+    private val defaultConfig: IAdvancedConfigurationSection = factory.default
+
     open fun init(instance: MahjongInstance) {}
 
     fun loadConfig(config: IAdvancedConfigurationSection) {
         this._config = config
     }
 
-    fun getDefaultConfig(): IAdvancedConfigurationSection {
-        return factory.default
-    }
+//    fun getDefaultConfig(): IAdvancedConfigurationSection {
+//        return factory.default
+//    }
 
     protected fun <T> getOrDefault(value: (IAdvancedConfigurationSection) -> T?): T? {
         val config = _config
@@ -25,7 +27,7 @@ abstract class AbstractCostume {
             result = value(config)
         }
         if (result == null) {
-            result = value(getDefaultConfig())
+            result = value(defaultConfig)
         }
 
         return result

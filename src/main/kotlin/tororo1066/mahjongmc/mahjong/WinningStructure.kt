@@ -9,7 +9,7 @@ data class WinningStructure(
 
     fun getWaitType(): WaitType? {
         val melds = winningTiles.melds
-        val head = winningTiles.heads.first()
+        val head = winningTiles.heads.firstOrNull() ?: return WaitType.TANKI // 七対子の場合は単騎待ちとする
         // 単騎待ち
         if (melds.all { meld -> !meld.tiles.contains(winningTile) } && head.isSameTile(winningTile)) {
             return WaitType.TANKI

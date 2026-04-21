@@ -29,4 +29,9 @@ enum class HonorTiles {
     fun isWind(): Boolean {
         return this == EAST || this == SOUTH || this == WEST || this == NORTH
     }
+
+    companion object {
+        val WINDS = setOf(EAST, SOUTH, WEST, NORTH)
+        val DRAGONS = setOf(WHITE, GREEN, RED)
+    }
 }

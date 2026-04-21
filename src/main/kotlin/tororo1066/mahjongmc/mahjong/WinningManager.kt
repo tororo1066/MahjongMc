@@ -5,14 +5,14 @@ import tororo1066.mahjongmc.game.MahjongInstance
 import tororo1066.mahjongmc.game.PlayerInstance
 import tororo1066.mahjongmc.tile.Tile
 import tororo1066.mahjongmc.tile.TileType
-import tororo1066.mahjongmc.mahjong.yaku.bonus.Bonus
-import tororo1066.mahjongmc.mahjong.yaku.bonus.HiddenBonus
-import tororo1066.mahjongmc.mahjong.yaku.bonus.OneShot
-import tororo1066.mahjongmc.mahjong.yaku.bonus.RedBonus
+import tororo1066.mahjongmc.mahjong.yaku.bonus.*
+import tororo1066.mahjongmc.mahjong.yaku.doubleYakuman.*
 import tororo1066.mahjongmc.mahjong.yaku.one.*
+import tororo1066.mahjongmc.mahjong.yaku.other.*
+import tororo1066.mahjongmc.mahjong.yaku.six.*
+import tororo1066.mahjongmc.mahjong.yaku.three.*
 import tororo1066.mahjongmc.mahjong.yaku.two.*
-import tororo1066.mahjongmc.mahjong.yaku.yakuman.AbstractYakumanResponsiblePaymentWinning
-import tororo1066.tororopluginapi.SJavaPlugin
+import tororo1066.mahjongmc.mahjong.yaku.yakuman.*
 import kotlin.math.pow
 
 object WinningManager {
@@ -38,12 +38,48 @@ object WinningManager {
         LittleThreeDragons,
         ThreeConsecutiveSequences,
         FourTriplets,
+        ThreeConcealedTriplets,
+        ThreeFours,
+        ThreeSimilarSequences,
+        ThreeSimilarTriplets,
+        TerminalOrHonorInEachMeld,
+        AllTerminalsAndHonors,
 
-        // その他
+        // 3翻
+        OneSuitWithHonors,
+        TerminalInEachMeld,
+        TwoTwinSequences,
+
+        // 6翻
+        OneSuitOnly,
+
+        // 役満
+        AllGreen,
+        AllHonors,
+        AllTerminals,
+        BigThreeDragons,
+        LittleFourWinds,
+        HeavenlyHand,
+        EarthlyHand,
+        FourConcealedTriplets,
+        FourFours,
+        NineGates,
+        ThirteenOrphans,
+
+        // ダブル役満
+        BigFourWinds,
+        FourConcealedTripletsPairWait,
+        ThirteenWaitThirteenOrphans,
+        TrueNineGates,
+
+        // ボーナス
         Bonus,
         HiddenBonus,
         RedBonus,
-        OneShot
+        OneShot,
+
+        // 役なし
+        DiscardTerminalsAndHonorsThroughout
     )
 
     fun tilesToCounts(tiles: List<Tile>): IntArray {
@@ -76,10 +112,6 @@ object WinningManager {
         }
 
         return checkNormalWithRequiredMelds(counts, requiredMelds)
-    }
-
-    fun richiDiscards(tiles: List<Tile>): Set<Tile> {
-        return richiDiscards(tiles, emptyList())
     }
 
     /**
@@ -133,9 +165,6 @@ object WinningManager {
         val result = mutableSetOf<Tile>()
         val counts = tilesToCounts(tiles)
 
-        // 暗槓のみ対応（それ以外が混ざる場合は安全側に倒す）
-        if (calls.any { it.type != Call.Type.CONCEALED_KAN }) return emptySet()
-
         val requiredMelds = 4 - calls.size
         if (requiredMelds < 0) return emptySet()
 
@@ -170,24 +199,25 @@ object WinningManager {
     ): Winning? {
         var bestWinning: Winning? = null
 
-        val winningStructures = findWinningTiles(
+        val winningStructures = findWinningStructures(
             tiles,
-            player.calls
-        ).map { winningTiles ->
-            WinningStructure(winningTiles, winningTile)
-        }
+            player.calls,
+            winningTile,
+            isTsumo
+        )
 
         for (structure in winningStructures) {
             val winnings = findWinnings(instance, player, structure, isTsumo)
             if (winnings.isEmpty()) continue
             if (!validateWinnings(winnings)) continue
 
-            val score = getBaseScore(instance, player, structure, winnings, isTsumo)
+            val (score, winningType) = getWinningScore(instance, player, structure, winnings, isTsumo)
             if (bestWinning == null || score > bestWinning.baseScore) {
                 bestWinning = Winning(
                     winnings,
                     structure,
-                    score
+                    score,
+                    winningType
                 )
             }
         }
@@ -207,6 +237,18 @@ object WinningManager {
                 result.add(yaku)
             }
         }
+
+        for (winning in result.toList()) {
+            if (winning.conflictsWith.any { it in result }) {
+                result.remove(winning)
+            }
+        }
+
+        if (winnings.any { it is AbstractYakumanWinning }) {
+            // 役満がある場合、役満以外はすべて無効
+            return result.filterIsInstance<AbstractYakumanWinning>()
+        }
+
         return result
     }
 
@@ -267,14 +309,16 @@ object WinningManager {
         }
 
         // 雀頭の符
-        val head = winningStructure.winningTiles.heads.first()
-        if (head.type == TileType.HONORS) {
-            if (head.honor.isDragon()) {
-                fu += 2
-            } else {
-                val position = head.honor.getPosition()
-                if (position == instance.roundWind || position == player.position) {
+        val head = winningStructure.winningTiles.heads.firstOrNull()
+        if (head != null) {
+            if (head.type == TileType.HONORS) {
+                if (head.honor.isDragon()) {
                     fu += 2
+                } else {
+                    val position = head.honor.getPosition()
+                    if (position == instance.roundWind || position == player.position) {
+                        fu += 2
+                    }
                 }
             }
         }
@@ -290,15 +334,32 @@ object WinningManager {
         return if (fu % 10 == 0) fu else ((fu / 10) + 1) * 10
     }
 
-    fun getBaseScore(
+    data class WinningScore(
+        val baseScore: Int,
+        val winningType: WinningType
+    )
+
+    fun getWinningScore(
         instance: MahjongInstance,
         player: PlayerInstance,
         winningStructure: WinningStructure,
         winnings: List<AbstractWinning>,
         isTsumo: Boolean
-    ): Int {
-        if (winnings.any { it.yakumanValue != 0 }) {
-            return winnings.sumOf { it.yakumanValue } * 8000
+    ): WinningScore {
+        val yakumanWinnings = winnings.filterIsInstance<AbstractYakumanWinning>()
+        if (yakumanWinnings.isNotEmpty()) {
+//            return yakumanWinnings.sumOf { it.yakumanValue } * 8000
+            val yakumanValue = yakumanWinnings.sumOf { it.yakumanValue }
+            val winningType = when (yakumanValue) {
+                1 -> WinningType.YAKUMAN
+                2 -> WinningType.DOUBLE_YAKUMAN
+                3 -> WinningType.TRIPLE_YAKUMAN
+                else -> WinningType.YAKUMAN
+            }
+            return WinningScore(
+                baseScore = yakumanValue * 8000,
+                winningType = winningType
+            )
         }
 
         val fu = getFu(instance, player, winningStructure, winnings, isTsumo)
@@ -307,128 +368,251 @@ object WinningManager {
         }
 
         var score = (2.0.pow(han + 2) * fu).toInt()
-        score = if (score >= 2000 || han >= 5) {
+        val winningType: WinningType
+
+        if (score >= 2000 || han >= 5) {
             when {
-                han >= 13 -> 8000 // 役満
-                han >= 11 -> 6000 // 三倍満
-                han >= 8 -> 4000 // 倍満
-                han >= 6 -> 3000 // 跳満
-                else -> 2000 // 満貫
+                han >= 13 -> {
+                    winningType = WinningType.COUNTED_YAKUMAN
+                    score = 8000
+                }
+                han >= 11 -> {
+                    winningType = WinningType.SANBAIMAN
+                    score = 6000
+                }
+                han >= 8 -> {
+                    winningType = WinningType.BAIMAN
+                    score = 4000
+                }
+                han >= 6 -> {
+                    winningType = WinningType.HANEMAN
+                    score = 3000
+                }
+                else -> {
+                    winningType = WinningType.MANGAN
+                    score = 2000
+                }
             }
         } else {
-            ((score + 99) / 100) * 100 // 100点単位に切り上げ
+            score = ((score + 99) / 100) * 100 // 100点単位に切り上げ
+            winningType = WinningType.NORMAL
         }
 
-        return score
+        return WinningScore(
+            baseScore = score,
+            winningType = winningType
+        )
     }
 
-    fun getScoreOnNagashiMangan(
+    fun paymentNagashiManganWinning(
         instance: MahjongInstance,
-        player: PlayerInstance,
-        payer: PlayerInstance
+        player: PlayerInstance
     ): Int {
         val isDealer = player.position == instance.dealerPosition
-        val isPayerDealer = payer.position == instance.dealerPosition
 
-        return if (isDealer || isPayerDealer) 4000 else 2000
+        var winningScore = 0
+
+        instance.players.forEach { p ->
+            if (p == player) return@forEach
+            val isPayerDealer = p.position == instance.dealerPosition
+            val payment = if (isDealer || isPayerDealer) 4000 else 2000
+
+            p.score -= payment
+            player.score += payment
+
+            winningScore += payment
+        }
+
+        return winningScore
     }
 
-    fun getScoreOnTsumo(
+    fun paymentTsumoWinning(
         instance: MahjongInstance,
         player: PlayerInstance,
-        payer: PlayerInstance,
-        winning: Winning
-    ): Int = getScoreOnWinning(instance, player, payer, winning, dealerMultiplier = 2, nonDealerMultiplier = 1)
+        winning: Winning,
+        richiSticks: Int,
+        continueCount: Int
+    ): Int {
+        val (winnings, _, baseScore) = winning
+        if (winnings.any { it is AbstractYakumanWinning }) {
+            return paymentYakumanTsumoWinning(instance, player, winning, richiSticks, continueCount)
+        }
 
-    fun getScoreOnRon(
+        val isDealer = player.position == instance.dealerPosition
+        val continuePayment = continueCount * 100
+
+        var winningScore = 0
+
+        instance.players.forEach { p ->
+            if (p == player) return@forEach
+            val isPayerDealer = p.position == instance.dealerPosition
+            val winningPayment = if (isDealer || isPayerDealer) baseScore * 2 else baseScore
+            val totalPayment = winningPayment + continuePayment
+            p.score -= totalPayment
+            player.score += totalPayment
+            winningScore += winningPayment
+        }
+
+        player.score += richiSticks * 1000
+
+        return winningScore
+    }
+
+    fun paymentYakumanTsumoWinning(
         instance: MahjongInstance,
         player: PlayerInstance,
-        payer: PlayerInstance,
-        winning: Winning
-    ): Int = getScoreOnWinning(instance, player, payer, winning, dealerMultiplier = 6, nonDealerMultiplier = 4)
+        winning: Winning,
+        richiSticks: Int,
+        continueCount: Int
+    ): Int {
+        val (winnings, _, _) = winning
+        val yakumanWinnings = winnings.filterIsInstance<AbstractYakumanWinning>()
+        if (yakumanWinnings.isEmpty()) return 0
 
-    private fun getScoreOnWinning(
+        val isDealer = player.position == instance.dealerPosition
+
+        val responsiblePaymentPlayers = mutableSetOf<PlayerInstance>()
+        var winningScore = 0
+
+        yakumanWinnings.forEach { winning ->
+            val baseScore = winning.yakumanValue * 8000
+            if (winning is AbstractYakumanResponsiblePaymentWinning) {
+                val target = winning.checkTarget(player)
+                val targetPlayer = instance.players.find { it.position == target } ?: return@forEach
+                if (target != null) {
+                    val totalPayment = instance.players.filter { it.position != target }.sumOf { p ->
+                        if (isDealer || p.position == instance.dealerPosition) baseScore * 2 else baseScore
+                    }
+
+                    responsiblePaymentPlayers.add(targetPlayer)
+
+                    targetPlayer.score -= totalPayment
+                    player.score += totalPayment
+
+                    winningScore += totalPayment
+                    return@forEach
+                }
+            }
+
+            instance.players.forEach { p ->
+                if (p == player) return@forEach
+                val isPayerDealer = p.position == instance.dealerPosition
+                val payment = if (isDealer || isPayerDealer) baseScore * 2 else baseScore
+                p.score -= payment
+                player.score += payment
+                winningScore += payment
+            }
+        }
+
+        if (responsiblePaymentPlayers.isNotEmpty()) {
+            // 包の対象となったプレイヤーから積み棒の分も徴収する(全員徴収するかは要検討)
+            val continuePayment = continueCount * 100 * (instance.players.size - 1)
+            responsiblePaymentPlayers.forEach { p ->
+                p.score -= continuePayment
+                player.score += continuePayment
+            }
+        } else {
+            // 包がない場合は全員から積み棒の分も徴収する
+            val coutinuePayment = continueCount * 100
+            instance.players.forEach { p ->
+                if (p == player) return@forEach
+                p.score -= coutinuePayment
+                player.score += coutinuePayment
+            }
+        }
+
+        player.score += richiSticks * 1000
+
+        return winningScore
+    }
+
+    fun paymentRonWinning(
         instance: MahjongInstance,
         player: PlayerInstance,
         payer: PlayerInstance,
         winning: Winning,
-        dealerMultiplier: Int,
-        nonDealerMultiplier: Int
+        richiSticks: Int,
+        continueCount: Int
     ): Int {
+        val (winnings, _, baseScore) = winning
+        if (winnings.any { it is AbstractYakumanWinning }) {
+            return paymentYakumanRonWinning(instance, player, payer, winning, richiSticks, continueCount)
+        }
+
         val isDealer = player.position == instance.dealerPosition
         val isPayerDealer = payer.position == instance.dealerPosition
-        val (winnings, _, baseScore) = winning
 
-        val multiplier = if (isDealer || isPayerDealer) dealerMultiplier else nonDealerMultiplier
+        val winningPayment = if (isDealer || isPayerDealer) baseScore * 6 else baseScore * 4
+        val continuePayment = continueCount * 300
 
-//        return (baseScore + checkResponsiblePayment(player, payer, winnings)) * multiplier
+        val totalPayment = winningPayment + continuePayment
+
+        payer.score -= totalPayment
+        player.score += totalPayment
+
+        player.score += richiSticks * 1000
+
+        return winningPayment
     }
 
-    fun checkResponsiblePayment(
+    fun paymentYakumanRonWinning(
         instance: MahjongInstance,
         player: PlayerInstance,
         payer: PlayerInstance,
-        winnings: List<AbstractWinning>
+        winning: Winning,
+        richiSticks: Int,
+        continueCount: Int
     ): Int {
-        val seats = instance.settings.playerSettings.seats
-        val responsiblePaymentWinnings = winnings.filterIsInstance<AbstractYakumanResponsiblePaymentWinning>()
-        var scoreAdjustment = 0
-        responsiblePaymentWinnings.forEach { winning ->
-//            val check = winning.checkPao(player) == payer.position
-//            val yakumanScore = winning.yakumanValue * 8000
-//            if (check) {
-//                scoreAdjustment += yakumanScore
-//            } else {
-//                scoreAdjustment -= yakumanScore
-//            }
-            val target = winning.checkPao(player) ?: return@forEach
-            if (target == payer.position) {
-                scoreAdjustment += winning.yakumanValue * 8000 * (seats - 1)
-            } else {
-                scoreAdjustment -= winning.yakumanValue * 8000
+        val (winnings, _, _) = winning
+        val yakumanWinnings = winnings.filterIsInstance<AbstractYakumanWinning>()
+        if (yakumanWinnings.isEmpty()) return 0
+
+        val isDealer = player.position == instance.dealerPosition
+        val isPayerDealer = payer.position == instance.dealerPosition
+
+        val responsiblePaymentPlayers = mutableSetOf<PlayerInstance>()
+        var winningScore = 0
+
+        yakumanWinnings.forEach { winning ->
+            val payment = winning.yakumanValue * 8000 * if (isDealer || isPayerDealer) 6 else 4
+            if (winning is AbstractYakumanResponsiblePaymentWinning) {
+                val target = winning.checkTarget(player)
+                val targetPlayer = instance.players.find { it.position == target } ?: return@forEach
+                if (target != null) {
+                    val halfPayment = payment / 2
+                    responsiblePaymentPlayers.add(targetPlayer)
+
+                    payer.score -= halfPayment
+                    targetPlayer.score -= halfPayment
+                    player.score += payment
+
+                    winningScore += payment
+
+                    return@forEach
+                }
             }
+
+            payer.score -= payment
+            player.score += payment
+            winningScore += payment
         }
-        return scoreAdjustment
+
+        val continuePayment = continueCount * 300
+
+        if (responsiblePaymentPlayers.isNotEmpty()) {
+            responsiblePaymentPlayers.forEach { p ->
+                p.score -= continuePayment
+                player.score += continuePayment
+            }
+        } else {
+            payer.score -= continuePayment
+            player.score += continuePayment
+        }
+
+        player.score += richiSticks * 1000
+
+        return winningScore
     }
-
-//    fun getScoreOnTsumo(
-//        player: PlayerInstance,
-//        payer: PlayerInstance,
-//        winnings: List<AbstractWinning>,
-//        isChild: Boolean,
-//        baseScore: Int
-//    ): Pair<Int, Int> { // (fromChild to fromParent)
-//        if (winnings.none { it is AbstractYakumanResponsiblePaymentWinning }) {
-//            return if (isChild) {
-//                baseScore to baseScore * 2
-//            } else {
-//                baseScore * 2 to 0 // 親は子からのみ支払い
-//            }
-//        }
-//
-//        // 責任払い
-//        val responsiblePaymentWinnings = winnings.filterIsInstance<AbstractYakumanResponsiblePaymentWinning>()
-//
-//        var childPayment = 0
-//
-////        return if (isChild) {
-////            baseScore to baseScore * 2
-////        } else {
-////            baseScore * 2 to 0 // 親は子からのみ支払い
-////        }
-//    }
-
-//    fun getScoreOnRon(
-//        isChild: Boolean,
-//        baseScore: Int
-//    ): Int {
-//        return if (isChild) {
-//            baseScore * 4
-//        } else {
-//            baseScore * 6
-//        }
-//    }
-
 
     private sealed class MeldIndex {
         data class Triplet(val index: Int): MeldIndex()
@@ -463,21 +647,12 @@ object WinningManager {
         }
     }
 
-    fun findWinningTiles(
+    fun findWinningStructures(
         tiles: List<Tile>,
-        calls: List<Call>
-    ): List<WinningTiles> {
-
-        if (calls.isEmpty()) {
-            // 七対子判定
-            findSevenPairsWinningTiles(tiles)?.let {
-                return listOf(it)
-            }
-            // 国士無双判定
-            findThirteenOrphans(tiles)?.let {
-                return listOf(it)
-            }
-        }
+        calls: List<Call>,
+        winningTile: Tile,
+        isTsumo: Boolean
+    ): List<WinningStructure> {
 
         fun IntArray.copyAndDecrement(index: Int, amount: Int = 1): IntArray =
             this.copyOf().also { it[index] -= amount }
@@ -540,14 +715,19 @@ object WinningManager {
 
         search(initialState)
 
+        if (calls.isEmpty()) {
+            findSevenPairs(tiles)?.let { results.add(it) }
+            findThirteenOrphans(tiles)?.let { results.add(it) }
+        }
+
         return results.map { state ->
-            restoreWinningTiles(state, tiles, meldsFromCalls)
+            restoreWinningStructure(state, tiles, meldsFromCalls, winningTile, isTsumo)
         }
     }
 
-    fun findThirteenOrphans(
+    private fun findThirteenOrphans(
         tiles: List<Tile>
-    ): WinningTiles? {
+    ): State? {
         val counts = tilesToCounts(tiles)
         val requiredIndices = setOf(
             0, 8, 9, 17, 18, 26, // 1と9の数牌
@@ -564,22 +744,16 @@ object WinningManager {
         }
         if (pairIndex == null) return null
 
-        val heads = listOf(
-            Tile.fromIndex(pairIndex),
-            Tile.fromIndex(pairIndex)
-        )
-        val melds = requiredIndices.filter { it != pairIndex }
-            .map { index -> Meld.Single(Tile.fromIndex(index)) }
-
-        return WinningTiles(
-            heads = heads,
-            melds = melds
+        return State(
+            counts = counts,
+            head = pairIndex,
+            melds = requiredIndices.filter { it != pairIndex }.map { MeldIndex.Single(it) }
         )
     }
 
-    fun findSevenPairsWinningTiles(
+    private fun findSevenPairs(
         tiles: List<Tile>
-    ): WinningTiles? {
+    ): State? {
         val counts = tilesToCounts(tiles)
         val pairs = mutableListOf<Int>()
         for (i in 0 until 34) {
@@ -591,43 +765,41 @@ object WinningManager {
         }
         if (pairs.size != 7) return null
 
-        val heads = pairs.flatMap { index ->
-            listOf(
-                Tile.fromIndex(index),
-                Tile.fromIndex(index)
-            )
-        }
-
-        return WinningTiles(
-            heads = heads,
-            melds = emptyList()
+        return State(
+            counts = counts,
+            head = null,
+            melds = pairs.map { MeldIndex.Pair(it) }
         )
     }
 
-    private fun restoreWinningTiles(
+    private fun restoreWinningStructure(
         state: State,
         tiles: List<Tile>,
-        meldsFromCalls: List<Meld>
-    ): WinningTiles {
+        meldsFromCalls: List<Meld>,
+        winningTile: Tile,
+        isTsumo: Boolean
+    ): WinningStructure {
         val pools = tiles.groupBy { it.getIndex() }
             .mapValues { entry -> entry.value.toMutableList() }
 
         val melds = state.melds.map { meldIndex ->
             when (meldIndex) {
                 is MeldIndex.Triplet -> {
+                    val tiles = List(3) {
+                        pools[meldIndex.index]!!.removeFirst()
+                    }
                     Meld.Triplet(
-                        List(3) {
-                            pools[meldIndex.index]!!.removeFirst()
-                        }
+                        tiles,
+                        isCalled = !isTsumo && tiles.contains(winningTile)
                     )
                 }
                 is MeldIndex.Sequence -> {
+                    val tiles = List(3) {
+                        pools[meldIndex.index + it]!!.removeFirst()
+                    }
                     Meld.Sequence(
-                        listOf(
-                            pools[meldIndex.index]!!.removeFirst(),
-                            pools[meldIndex.index + 1]!!.removeFirst(),
-                            pools[meldIndex.index + 2]!!.removeFirst()
-                        )
+                        tiles,
+                        isCalled = !isTsumo && tiles.contains(winningTile)
                     )
                 }
                 is MeldIndex.Single -> {
@@ -646,17 +818,25 @@ object WinningManager {
             }
         }
 
-        val headTiles = listOf(
-            pools[state.head!!]!!.removeFirst(),
-            pools[state.head]!!.removeFirst()
-        )
+        val headTiles = if (state.head != null) {
+            listOf(
+                pools[state.head]!!.removeFirst(),
+                pools[state.head]!!.removeFirst()
+            )
+        } else {
+            emptyList()
+        }
 
         val winningTiles = WinningTiles(
             heads = headTiles,
             melds = melds + meldsFromCalls
         )
-        SJavaPlugin.plugin.logger.info("Restored winning tiles: ${winningTiles}")
-        return winningTiles
+        return WinningStructure(winningTiles, winningTile)
+    }
+
+    fun checkThirteenOrphans(tiles: List<Tile>): Boolean {
+        val counts = tilesToCounts(tiles)
+        return checkThirteenOrphans(counts)
     }
 
     private fun checkSevenPairs(counts: IntArray): Boolean {

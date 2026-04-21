@@ -25,7 +25,8 @@ sealed class Meld {
             return when (call.type) {
                 Call.Type.PON -> Triplet(call.tiles, true)
                 Call.Type.CHI -> Sequence(call.tiles.sortedBy { it.getIndex() }, true)
-                Call.Type.KAN, Call.Type.LATE_KAN, Call.Type.CONCEALED_KAN -> Quadruplet(call.tiles, true)
+                Call.Type.KAN, Call.Type.LATE_KAN -> Quadruplet(call.tiles, true)
+                Call.Type.CONCEALED_KAN -> Quadruplet(call.tiles, false)
             }
         }
     }

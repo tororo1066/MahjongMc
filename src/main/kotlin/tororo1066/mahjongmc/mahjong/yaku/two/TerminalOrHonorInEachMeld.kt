@@ -3,11 +3,14 @@ package tororo1066.mahjongmc.mahjong.yaku.two
 import tororo1066.mahjongmc.Call.Companion.excludeConcealedKan
 import tororo1066.mahjongmc.game.MahjongInstance
 import tororo1066.mahjongmc.game.PlayerInstance
+import tororo1066.mahjongmc.mahjong.AbstractWinning
 import tororo1066.mahjongmc.mahjong.WinningStructure
+import tororo1066.mahjongmc.mahjong.yaku.three.TerminalInEachMeld
 import tororo1066.mahjongmc.tile.Tile
 
 object TerminalOrHonorInEachMeld: AbstractTwoWinning() {
     override val name: String = "混全帯么九"
+    override val conflictsWith: Set<AbstractWinning> = setOf(TerminalInEachMeld, AllTerminalsAndHonors)
 
     override fun check(
         instance: MahjongInstance,

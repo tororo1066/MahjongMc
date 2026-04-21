@@ -3,24 +3,16 @@ package tororo1066.mahjongmc.game
 import com.github.shynixn.mccoroutine.bukkit.asyncDispatcher
 import com.github.shynixn.mccoroutine.bukkit.minecraftDispatcher
 import com.github.shynixn.mccoroutine.bukkit.ticks
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.bukkit.Location
 import tororo1066.displaymonitorapi.configuration.IAdvancedConfigurationSection
-import tororo1066.mahjongmc.Call
-import tororo1066.mahjongmc.DeadWall
-import tororo1066.mahjongmc.MahjongSettings
-import tororo1066.mahjongmc.SelfTileAction
-import tororo1066.mahjongmc.ToTileAction
+import tororo1066.mahjongmc.*
 import tororo1066.mahjongmc.costume.MahjongTableCostume
 import tororo1066.mahjongmc.enums.PlayerSettings
 import tororo1066.mahjongmc.enums.Position
@@ -31,15 +23,17 @@ import tororo1066.mahjongmc.game.ui.MahjongDisplays.KAN_DISPLAY
 import tororo1066.mahjongmc.game.ui.MahjongDisplays.PON_DISPLAY
 import tororo1066.mahjongmc.game.ui.MahjongDisplays.POSITION_DISPLAY
 import tororo1066.mahjongmc.game.ui.MahjongDisplays.RICHI_DISPLAY
+import tororo1066.mahjongmc.game.ui.MahjongDisplays.RICHI_STICK_DISPLAY
 import tororo1066.mahjongmc.game.ui.MahjongDisplays.RON_DISPLAY
+import tororo1066.mahjongmc.game.ui.MahjongDisplays.RYUKYOKU_ACTION_DISPLAY
 import tororo1066.mahjongmc.game.ui.MahjongDisplays.SKIP_DISPLAY
 import tororo1066.mahjongmc.game.ui.MahjongDisplays.TILE_DISPLAY
 import tororo1066.mahjongmc.game.ui.MahjongDisplays.TIME_DISPLAY
 import tororo1066.mahjongmc.game.ui.MahjongDisplays.TSUMO_DISPLAY
 import tororo1066.mahjongmc.game.ui.MahjongRenderer
-import tororo1066.mahjongmc.mahjong.AbstractWinning
+import tororo1066.mahjongmc.mahjong.Winning
 import tororo1066.mahjongmc.mahjong.WinningManager
-import tororo1066.mahjongmc.mahjong.WinningStructure
+import tororo1066.mahjongmc.mahjong.WinningType
 import tororo1066.mahjongmc.mahjong.yaku.other.DiscardTerminalsAndHonorsThroughout
 import tororo1066.mahjongmc.tile.HonorTiles
 import tororo1066.mahjongmc.tile.Tile
@@ -49,8 +43,7 @@ import kotlin.coroutines.cancellation.CancellationException
 
 open class MahjongInstance(
     val centerLocation: Location,
-    val settings: MahjongSettings = MahjongSettings(),
-    val debug: Boolean = false
+    val settings: MahjongSettings = MahjongSettings()
 ) {
 
     val scope = CoroutineScope(SupervisorJob() + SJavaPlugin.plugin.asyncDispatcher)
@@ -126,21 +119,20 @@ open class MahjongInstance(
 
         object Prepare : Phase() {
             override suspend fun step(instance: MahjongInstance): Phase {
-                instance.setupTiles()
-                instance.renderer.asyncRenderPosition().join()
-                instance.renderer.spawnDeadWallTiles()
-                instance.spawnPrepareTiles()
-                delay(12.ticks)
-                return Draw
+                instance.prepare()
+                return CheckCurrentState
+            }
+        }
+
+        object CheckCurrentState : Phase() {
+            override suspend fun step(instance: MahjongInstance): Phase {
+                val currentState = instance.checkCurrentState()
+                return currentState ?: Draw
             }
         }
 
         object Draw : Phase() {
             override suspend fun step(instance: MahjongInstance): Phase {
-                val currentState = instance.checkCurrentState()
-                if (currentState != null) {
-                    return currentState
-                }
                 instance.drawTile()
                 return DiscardWait
             }
@@ -148,7 +140,14 @@ open class MahjongInstance(
 
         object DiscardWait : Phase() {
             override suspend fun step(instance: MahjongInstance): Phase {
-                val next = instance.waitDiscardAction()
+                val next = instance.waitDiscardAction(isCalled = false)
+                return next
+            }
+        }
+
+        object CallDiscardWait : Phase() {
+            override suspend fun step(instance: MahjongInstance): Phase {
+                val next = instance.waitDiscardAction(isCalled = true)
                 return next
             }
         }
@@ -163,7 +162,7 @@ open class MahjongInstance(
         object NextTurn : Phase() {
             override suspend fun step(instance: MahjongInstance): Phase {
                 instance.nextTurn()
-                return Draw
+                return CheckCurrentState
             }
         }
 
@@ -172,6 +171,7 @@ open class MahjongInstance(
                 instance.players.forEach { player ->
                     instance.renderer.removeDisplays(player, TILE_DISPLAY)
                     instance.renderer.removeDisplays(player, POSITION_DISPLAY)
+                    instance.renderer.removeDisplays(player, RICHI_STICK_DISPLAY)
                 }
                 instance.playersNextRound()
                 return Prepare
@@ -180,8 +180,7 @@ open class MahjongInstance(
 
         object End : Phase() {
             override suspend fun step(instance: MahjongInstance): Phase? {
-                // TODO: 終了処理
-
+                instance.end()
                 return null
             }
         }
@@ -212,12 +211,38 @@ open class MahjongInstance(
         }
     }
 
+    suspend fun prepare() {
+        richiContext.emit(RichiContext())
+
+        setupTiles()
+        setTurnPlayer(players.first { it.position == dealerPosition })
+
+        renderer.asyncRenderPosition().join()
+        renderer.asyncRenderState().join()
+        renderer.spawnDeadWallTiles()
+        spawnPrepareTiles()
+        delay(12.ticks)
+    }
+
+    suspend fun end() {
+        renderer.removeAllDisplays()
+    }
+
+    fun stop() {
+        scope.launch {
+            end()
+        }.invokeOnCompletion {
+            scope.cancel()
+            minecraftScope.cancel()
+        }
+    }
+
     fun setupTiles() {
         generalTiles.clear()
         for (type in TileType.entries.filter { it != TileType.HONORS }) {
             for (number in 1..9) {
                 for (count in 0 until 4) {
-                    if (settings.playerSettings == PlayerSettings.PLAYERS_3 && type == TileType.BAMBOO && number in 2..8) {
+                    if (settings.playerSettings == PlayerSettings.PLAYERS_3 && type == TileType.CHARACTERS && number in 2..8) {
                         continue
                     }
                     val tile = Tile(
@@ -232,7 +257,7 @@ open class MahjongInstance(
         }
 
         repeat(4) {
-            for (honorType in 0 until 4) {
+            for (honorType in 0 until 7) {
                 val tile = Tile(
                     type = TileType.HONORS,
                     number = 0,
@@ -245,14 +270,13 @@ open class MahjongInstance(
         generalTiles.shuffle()
 
         players.forEach { instance ->
-            if (!debug) instance.tiles.clear()
             repeat(13) { i ->
-                // 既存の牌がある場合はそれを優先して使用する(主にデバッグ用)
-                val existingTile = instance.tiles.getOrNull(i)
+                val existingTile = instance.debugPrepareTiles.getOrNull(i)
                 if (existingTile != null) {
                     val tile = generalTiles.find { it.isSameTile(existingTile)  }
                     if (tile != null) {
                         generalTiles.remove(tile)
+                        instance.tiles.add(tile)
                         return@repeat
                     }
                 }
@@ -264,10 +288,44 @@ open class MahjongInstance(
         deadWall.setUpDeadWall(generalTiles, settings.playerSettings)
     }
 
+    fun asyncSpawnTile(player: PlayerInstance, tile: Tile, index: Int, lastTile: Boolean = false): Job {
+        return renderer.asyncSpawnTile(
+            tile = tile,
+            index = index,
+            player = player,
+            lastTile = lastTile,
+            onInteract = { context ->
+                if (context.target?.uniqueId != player.uuid) return@asyncSpawnTile
+                discardTileByInteraction(player, tile)
+            },
+            onHover = { context ->
+                if (context.target?.uniqueId != player.uuid) return@asyncSpawnTile
+                if (!player.tiles.contains(tile)) return@asyncSpawnTile
+                if (selfActed.value) return@asyncSpawnTile
+                tile.hovered = true
+                renderer.asyncHoverTile(player, tile)
+            },
+            onUnhover = { context ->
+                if (context.target?.uniqueId != player.uuid) return@asyncSpawnTile
+                if (!player.tiles.contains(tile)) return@asyncSpawnTile
+                if (!tile.hovered) return@asyncSpawnTile
+                tile.hovered = false
+                renderer.asyncUnhoverTile(player, tile)
+            }
+        )
+    }
+
     suspend fun spawnPrepareTiles(range: IntRange) {
-        renderer.spawnPrepareTiles(range) { player, tile ->
-            discardTileByInteraction(player, tile)
+        val tasks = mutableListOf<Job>()
+
+        players.forEach { player ->
+            range.forEach { index ->
+                val tile = player.tiles[index]
+                tasks.add(asyncSpawnTile(player, tile, index))
+            }
         }
+
+        tasks.joinAll()
     }
 
     suspend fun spawnPrepareTiles() {
@@ -284,6 +342,16 @@ open class MahjongInstance(
         delay(6.ticks)
 
         spawnPrepareTiles(12..12)
+
+        players.forEach { player ->
+            val beforeTiles = player.tiles.toList()
+            sortTiles(player)
+            renderer.sortTilesAnimation(
+                player = player,
+                receiver = player,
+                beforeTiles = beforeTiles,
+            )
+        }
     }
 
     suspend fun checkCurrentState(): Phase? {
@@ -293,28 +361,19 @@ open class MahjongInstance(
 
         val totalKanCount = kanCounts.sum()
         if (totalKanCount >= 4 && kanCounts.size != 1) {
-            return ryukyoku(isIntermediate = true)
+            return ryukyoku(type = RyukyokuType.MeldedFourFours)
         }
 
         if (generalTiles.isEmpty()) {
             return ryukyoku()
         }
 
-        val richiContextValue = richiContext.value
-        val richiDiscardedPlayer = richiContextValue.richiDiscardedPlayer
-        if (richiDiscardedPlayer != null) {
-            richiDiscardedPlayer.isRichi = true
-            richiDiscardedPlayer.isDoubleRichi = richiContextValue.isDoubleRichi
-            richiDiscardedPlayer.isOneShot = true
-            richiSticks++
-            //TODO: 立直棒表示
-        }
-
         return null
     }
 
+    //TODO: 流し満貫のデバッグ
     suspend fun ryukyoku(
-        isIntermediate: Boolean = false
+        type: RyukyokuType? = null
     ): Phase {
         val beforeScores = players.associateWith { it.score }
 
@@ -322,8 +381,9 @@ open class MahjongInstance(
         val nonTenpaiPlayers = players - tenpaiPlayers.toSet()
 
         val nagashiManganPlayers = mutableListOf<PlayerInstance>()
+        val nagashiManganScores = mutableMapOf<PlayerInstance, Int>()
 
-        if (!isIntermediate) {
+        if (type == null) {
             players.forEach { player ->
                 // 捨て牌が全て么九牌であり、かつ副露されていない場合流し満貫
                 if (player.discard.all { it.type == TileType.HONORS || it.number == 1 || it.number == 9 }
@@ -331,85 +391,83 @@ open class MahjongInstance(
                     nagashiManganPlayers.add(player)
                 }
             }
-        }
 
-        if (nagashiManganPlayers.isNotEmpty()) {
-            nagashiManganPlayers.forEach { player ->
-                var totalScore = 0
-                players.forEach { payer ->
-                    if (payer == player) return@forEach
-                    val score = WinningManager.getScoreOnNagashiMangan(
+            if (nagashiManganPlayers.isNotEmpty()) {
+                nagashiManganPlayers.forEach { player ->
+                    val score = WinningManager.paymentNagashiManganWinning(
                         instance = this,
-                        player = player,
-                        payer = payer
+                        player = player
                     )
-                    payer.score -= score
-                    totalScore += score
+                    nagashiManganScores[player] = score
                 }
+            } else {
+                if (tenpaiPlayers.isNotEmpty() && nonTenpaiPlayers.isNotEmpty()) {
+                    val totalPayment = (settings.playerSettings.seats - 1) * 1000
+                    val payment = totalPayment / nonTenpaiPlayers.size
+                    val reward = totalPayment / tenpaiPlayers.size
 
-                player.score += totalScore
+                    tenpaiPlayers.forEach { player ->
+                        player.score += reward
+                    }
+
+                    nonTenpaiPlayers.forEach { player ->
+                        player.score -= payment
+                    }
+                }
             }
+
+            val tenpaiTiles = tenpaiPlayers.associateWith { player ->
+                WinningManager.getTenpaiTiles(
+                    tiles = player.tiles,
+                    calls = player.calls
+                ).toList()
+            }
+
+            renderer.renderRyukyoku(
+                type = RyukyokuType.Normal(tenpaiTiles = tenpaiTiles)
+            )
         } else {
-            if (tenpaiPlayers.isNotEmpty() && nonTenpaiPlayers.isNotEmpty()) {
-                val totalPayment = (settings.playerSettings.seats - 1) * 1000
-                val payment = totalPayment / nonTenpaiPlayers.size
-                val reward = totalPayment / tenpaiPlayers.size
-
-                tenpaiPlayers.forEach { player ->
-                    player.score += reward
-                }
-
-                nonTenpaiPlayers.forEach { player ->
-                    player.score -= payment
-                }
-            }
+            renderer.renderRyukyoku(
+                type = type
+            )
         }
-
-        val tenpaiTiles = tenpaiPlayers.associateWith { player ->
-            WinningManager.getTenpaiTiles(
-                tiles = player.tiles,
-                calls = player.calls
-            ).toList()
-        }
-
-        renderer.renderRyukyoku(
-            tenpaiTiles = tenpaiTiles
-        )
 
         nagashiManganPlayers.forEach { player ->
             renderer.renderWinning(
                 player = player,
                 winnings = listOf(DiscardTerminalsAndHonorsThroughout),
                 winningTile = null,
-                score = player.score - beforeScores[player]!!,
-                type = MahjongRenderer.WinningType.NAGASHI_MANGAN,
-                getHan = { null },
-            )
+                fu = null,
+                score = nagashiManganScores[player] ?: 0,
+                winningType = WinningType.NORMAL,
+                winningBy = MahjongRenderer.WinningBy.NAGASHI_MANGAN,
+            ) { null }
         }
 
         renderer.renderScoreChange(
             beforeScores = beforeScores
         )
 
-        val nextRound = nextRound(
-            continuablePlayers = tenpaiPlayers + nagashiManganPlayers,
-            isRyukyoku = true
-        )
+        if (type == null) {
+            val nextRound = nextRound(
+                continuablePlayers = tenpaiPlayers + nagashiManganPlayers,
+                isRyukyoku = true
+            )
 
-        if (nextRound == Phase.End) {
-            players.maxBy {
-                it.score
-            }.score += richiSticks * 1000
+            if (nextRound == Phase.End) {
+                players.maxBy {
+                    it.score
+                }.score += richiSticks * 1000
+            }
+
+            return nextRound
+        } else {
+            return Phase.NextRound
         }
-
-        return nextRound
     }
 
     suspend fun drawTile() {
         val turnPlayer = turnPlayer
-
-        // 同巡内フリテンの解消
-        turnPlayer.ignoredRonOnSilent = false
 
         val drawReplacementTile = drawReplacementTile.compareAndSet(expect = true, update = false)
 
@@ -420,15 +478,10 @@ open class MahjongInstance(
         } ?: return
 
         turnPlayer.tiles.add(tile)
-        renderer.spawnTile(
-            tile = tile,
-            index = turnPlayer.tiles.size - 1,
-            player = turnPlayer,
-            lastTile = true
-        ) { context ->
-            if (context.target?.uniqueId != turnPlayer.uuid) return@spawnTile
-            discardTileByInteraction(turnPlayer, tile)
-        }.join()
+
+        renderer.asyncRenderState()
+
+        asyncSpawnTile(turnPlayer, tile, turnPlayer.tiles.size - 1, lastTile = true).join()
     }
 
     fun timeCountdown(
@@ -468,7 +521,9 @@ open class MahjongInstance(
                     ticks--
                 }
             } catch (e: CancellationException) {
-                renderer.removeDisplays(player, TIME_DISPLAY)
+                withContext(NonCancellable) {
+                    renderer.removeDisplays(player, TIME_DISPLAY)
+                }
                 throw e
             } finally {
                 player.setNextTimes(holdTime, backupTime)
@@ -483,7 +538,8 @@ open class MahjongInstance(
         }
     }
 
-    suspend fun discardTile(player: PlayerInstance, tile: Tile, force: Boolean = false) {
+    //TODO: 時間経過での捨て問題
+    suspend fun discardTile(player: PlayerInstance, tile: Tile, force: Boolean = false): Boolean {
         suspend fun func(): Boolean {
             if (currentPhase != Phase.DiscardWait) return false
             if (turn != player.position) return false
@@ -491,6 +547,27 @@ open class MahjongInstance(
             if (!settings.allowKuigae && kuigaeTiles.contains(tile)) return false
             val index = player.tiles.indexOf(tile)
             if (index == -1) return false
+//            if (currentPhase != Phase.DiscardWait && currentPhase != Phase.CallDiscardWait) {
+//                SJavaPlugin.plugin.logger.warning("Cannot discard tile because current phase is not DiscardWait")
+//                return false
+//            }
+//            if (turn != player.position) {
+//                SJavaPlugin.plugin.logger.warning("Cannot discard tile because it's not player's turn")
+//                return false
+//            }
+//            if (!player.tiles.contains(tile)) {
+//                SJavaPlugin.plugin.logger.warning("Cannot discard tile because player does not have the tile")
+//                return false
+//            }
+//            if (!settings.allowKuigae && kuigaeTiles.contains(tile)) {
+//                SJavaPlugin.plugin.logger.warning("Cannot discard tile because it's a kuigae tile")
+//                return false
+//            }
+//            val index = player.tiles.indexOf(tile)
+//            if (index == -1) {
+//                SJavaPlugin.plugin.logger.warning("Cannot discard tile because tile index is invalid")
+//                return false
+//            }
 
             val richiContextValue = richiContext.value
 
@@ -498,6 +575,7 @@ open class MahjongInstance(
 
             if (richiDeclared) {
                 if (!richiContextValue.richiableTiles.contains(tile)) {
+//                    SJavaPlugin.plugin.logger.warning("Cannot discard tile because it's not a richiable tile")
                     return false
                 }
             }
@@ -530,9 +608,10 @@ open class MahjongInstance(
                     )
                 }
 
-
-
-                //TODO: 立直演出
+                renderer.asyncRenderRichi(
+                    player = player,
+                    isDoubleRichi = isDoubleRichi
+                )
             }
 
             renderer.renderDiscardTile(
@@ -555,11 +634,14 @@ open class MahjongInstance(
         }
 
         if (force) {
-            func()
+            return func()
         } else {
+            var result = false
             selfTileActionGate.tryAct {
-                func()
+                result = func()
+                result
             }
+            return result
         }
     }
 
@@ -572,7 +654,6 @@ open class MahjongInstance(
     fun sortTiles(player: PlayerInstance) {
         player.tiles.sortWith(compareBy({ it.type.ordinal }, { it.number }, { it.honor.ordinal }))
     }
-
 
     suspend fun callTiles(
         call: Call,
@@ -597,7 +678,7 @@ open class MahjongInstance(
             existingCall.type = Call.Type.LATE_KAN
             existingCall.tiles.add(tile)
             call = existingCall
-            step = caller.calls.indexOf(existingCall)
+            step = caller.calls.indexOf(existingCall) + 1
         } else {
             caller.tiles.removeAll(call.tiles.filter { it != discardTile })
             sortTiles(caller)
@@ -636,27 +717,55 @@ open class MahjongInstance(
 
         setTurnPlayer(caller)
 
-        return Phase.DiscardWait
+        return if (call.isKan()) {
+            Phase.Draw
+        } else {
+            Phase.CallDiscardWait
+        }
     }
 
     // 牌を引いた後のアクション待ち
-    suspend fun waitDiscardAction(): Phase {
+    suspend fun waitDiscardAction(isCalled: Boolean): Phase {
+
+        val richiContextValue = richiContext.value
+        val richiDiscardedPlayer = richiContextValue.richiDiscardedPlayer
+        if (richiDiscardedPlayer != null) {
+            richiDiscardedPlayer.isRichi = true
+            richiDiscardedPlayer.isDoubleRichi = richiContextValue.isDoubleRichi
+            richiDiscardedPlayer.isOneShot = true
+            richiDiscardedPlayer.score -= 1000
+            richiSticks++
+
+            if (players.all { it.isRichi } && players.size >= 4) {
+                return ryukyoku(type = RyukyokuType.FourPlayersRichi)
+            }
+
+            renderer.asyncRenderRichiStick(
+                player = richiDiscardedPlayer
+            )
+        }
+
         val turnPlayer = turnPlayer
 
-        val canConcealedKan = turnPlayer.canConcealedKan(this)
-        val canLateKan = turnPlayer.canLateKan(this)
-        val canRichi = turnPlayer.canRichi(this)
-        val canTsumo = turnPlayer.canTsumo(this)
+        // 同巡内フリテンの解消
+        turnPlayer.ignoredRonOnSilent = false
+
+        val canConcealedKan = !isCalled && turnPlayer.canConcealedKan(this)
+        val canLateKan = !isCalled && turnPlayer.canLateKan(this)
+        val canRichi = !isCalled && turnPlayer.canRichi(this)
+        val canTsumo = !isCalled && turnPlayer.canTsumo(this) // TODO: 天和時の和了牌の自動選択
+        val canRyukyoku = !isCalled && turnPlayer.canNineDifferentTerminalsRyukyoku(this)
 
         selfActed.emit(false)
 
         if (turnPlayer.isRichi && (!canConcealedKan && !canLateKan && !canTsumo)) {
             // 立直後に何もできない場合は強制的に捨てる
-            discardTile(
+            val result = discardTile(
                 turnPlayer,
                 turnPlayer.tiles.last(),
                 force = true
             )
+            if (!result) throw IllegalStateException("Failed to discard tile for richi player with no actions")
             return Phase.ToTileActionWait
         }
 
@@ -669,14 +778,15 @@ open class MahjongInstance(
             player = turnPlayer,
             onTimeout = {
                 actedAction = null
-                discardTile(
+                val result = discardTile(
                     turnPlayer,
                     turnPlayer.tiles.last()
                 )
+                if (!result) throw IllegalStateException("Failed to discard tile on timeout")
             }
         )
 
-        if (canConcealedKan || canLateKan || canRichi || canTsumo) {
+        if (canConcealedKan || canLateKan || canRichi || canTsumo || canRyukyoku) {
             val mahjongTableCostume = turnPlayer.getCostume<MahjongTableCostume>()
             var concealed = false
             var index = 0
@@ -685,6 +795,7 @@ open class MahjongInstance(
                 if (canConcealedKan || canLateKan) KAN_DISPLAY else null,
                 if (canRichi) RICHI_DISPLAY else null,
                 if (canTsumo) TSUMO_DISPLAY else null,
+                if (canRyukyoku) RYUKYOKU_ACTION_DISPLAY else null,
             )
 
             fun concealDisplays() {
@@ -797,7 +908,7 @@ open class MahjongInstance(
                         return@spawnActionDisplay
                     }
 
-                    actedAction = SelfTileAction.RICHI to null
+//                    actedAction = SelfTileAction.RICHI to null
 
                     concealDisplays()
 
@@ -853,9 +964,25 @@ open class MahjongInstance(
                     renderer.asyncRemoveDisplays(turnPlayer, ACTION_DISPLAY)
                 }
             }
+
+            if (canRyukyoku) {
+                spawnActionDisplay(
+                    name = RYUKYOKU_ACTION_DISPLAY,
+                    displayActions = mahjongTableCostume.getRyukyokuActionDisplay()
+                ) {
+                    scope.launch {
+                        selfTileActionGate.tryAct {
+                            actedAction = SelfTileAction.RYUKYOKU to null
+                            selfActed.update { true }
+                            true
+                        }
+                    }
+                    renderer.asyncRemoveDisplays(turnPlayer, ACTION_DISPLAY)
+                }
+            }
         }
 
-        selfActed.filter { it }.first()
+        selfActed.first { it }
         timeCountdownJob.cancel()
         renderer.asyncRemoveDisplays(turnPlayer, ACTION_DISPLAY)
 
@@ -878,7 +1005,23 @@ open class MahjongInstance(
                     )
                     return nextPhase
                 }
+                SelfTileAction.RYUKYOKU -> {
+                    return ryukyoku(
+                        type = RyukyokuType.NineDifferentTerminals(player = turnPlayer)
+                    )
+                }
                 else -> {}
+            }
+        } ?: run {
+            if (players.all { it.calls.isEmpty() }) {
+                val tile = turnPlayer.discard.firstOrNull()
+                if (tile != null && tile.isWind()) {
+                    if (players.all { player ->
+                        player.discard.size == 1 && player.discard.first().isSameTile(tile)
+                    }) {
+                        return ryukyoku(type = RyukyokuType.DiscardingTheSameWind)
+                    }
+                }
             }
         }
 
@@ -891,9 +1034,9 @@ open class MahjongInstance(
             if (player == turnPlayer) return@filter false
             if (!player.canRon(discardTile, this)) return@filter false
             if (call.type == Call.Type.CONCEALED_KAN) {
-                return@filter WinningManager.findThirteenOrphans(
+                return@filter WinningManager.checkThirteenOrphans(
                     tiles = player.tiles + discardTile
-                ) != null
+                )
             }
             return@filter true
         }
@@ -1003,7 +1146,7 @@ open class MahjongInstance(
             val mahjongTableCostume = player.getCostume<MahjongTableCostume>()
 
             val canPon = player.canPon(discardTile, this)
-            val canChi = player.canChi(discardTile, this)
+            val canChi = player.canChi(discardTile, this, turnPlayer.position)
             val canKan = player.canKan(discardTile, this)
             val canRon = player.canRon(discardTile, this)
 
@@ -1171,8 +1314,9 @@ open class MahjongInstance(
             renderer.removeDisplays(player, ACTION_DISPLAY)
             renderer.removeDisplays(player, CHOICE_DISPLAY)
 
-            val actable = actablePlayers[player] ?: return@forEach
-            if (actable.contains(ToTileAction.RON) && actedPlayers[player]?.first != ToTileAction.RON) {
+            if (player == turnPlayer) return@forEach
+            val tenpaiTiles = WinningManager.getTenpaiTiles(player.tiles, player.calls)
+            if (tenpaiTiles.any { it.isSameTile(discardTile) } && actedPlayers[player]?.first != ToTileAction.RON) {
                 if (player.isRichi) {
                     player.ignoredRonOnRichi = true
                 } else {
@@ -1226,46 +1370,43 @@ open class MahjongInstance(
             isTsumo = true
         ) ?: throw IllegalStateException("Tsumo called but no winning found")
 
+        val fu = WinningManager.getFu(
+            instance = this,
+            player = player,
+            winningStructure = winning.winningStructure,
+            winnings = winning.winnings,
+            isTsumo = true
+        )
+
         renderer.renderTsumo(
             player = player,
             winningTile = winningTile
         )
 
-        val additionalScore = continueCount * 100
-
-        var totalScore = 0
-        players.forEach { payer ->
-            if (payer == player) return@forEach
-            val score = WinningManager.getScoreOnTsumo(
-                instance = this,
-                player = player,
-                payer = payer,
-                winning = winning
-            ) + additionalScore
-            payer.score -= score
-            totalScore += score
-        }
-
-        totalScore += richiSticks * 1000
-
-        player.score += totalScore
-        val visualTotalScore = totalScore - (continueCount * 100) - (richiSticks * 1000)
+        val visualTotalScore = WinningManager.paymentTsumoWinning(
+            instance = this,
+            player = player,
+            winning = winning,
+            richiSticks = richiSticks,
+            continueCount = continueCount
+        )
 
         renderer.renderWinning(
             player = player,
             winnings = winning.winnings,
             winningTile = winningTile,
+            fu = fu,
             score = visualTotalScore,
-            type = MahjongRenderer.WinningType.TSUMO,
-            getHan = {
-                getHan(
-                    instance = this@MahjongInstance,
-                    player = player,
-                    winningStructure = winning.winningStructure,
-                    isTsumo = true
-                )
-            }
-        )
+            winningType = winning.winningType,
+            winningBy = MahjongRenderer.WinningBy.TSUMO
+        ) {
+            getHan(
+                instance = this@MahjongInstance,
+                player = player,
+                winningStructure = winning.winningStructure,
+                isTsumo = true
+            )
+        }
 
         renderer.renderScoreChange(beforeScores)
         return nextRound(listOf(player), isRyukyoku = false)
@@ -1277,7 +1418,7 @@ open class MahjongInstance(
         discardTile: Tile
     ): Phase {
         val beforeScores = players.associateWith { it.score }
-        val winningsData = mutableMapOf<PlayerInstance, Triple<List<AbstractWinning>, WinningStructure, Int>>()
+        val winningsData = mutableMapOf<PlayerInstance, Pair<Winning, Int>>()
 
         // 上家から順に処理
         val ronPlayers = ronPlayers.sortedBy {
@@ -1293,26 +1434,29 @@ open class MahjongInstance(
                 isTsumo = false
             ) ?: return@forEachIndexed
 
-            var score = WinningManager.getScoreOnRon(
+            val score = WinningManager.paymentRonWinning(
                 instance = this,
                 player = player,
                 payer = targetPlayer,
-                winning = winning
+                winning = winning,
+                richiSticks = if (index == 0) richiSticks else 0,
+                continueCount = if (index == 0) continueCount else 0
             )
 
-            winningsData[player] = Triple(winning.winnings, winning.winningStructure, score)
-
-            if (index == 0) {
-                score += richiSticks * 1000
-                score += continueCount * 300
-            }
-
-            targetPlayer.score -= score
-            player.score += score
+            winningsData[player] = winning to score
         }
 
         winningsData.forEach { (player, data) ->
-            val (winnings, winningStructure, score) = data
+            val (winning, score) = data
+            val (winnings, winningStructure, _, winningType) = winning
+
+            val fu = WinningManager.getFu(
+                instance = this,
+                player = player,
+                winningStructure = winningStructure,
+                winnings = winnings,
+                isTsumo = false
+            )
 
             renderer.renderRon(
                 players = ronPlayers,
@@ -1324,17 +1468,18 @@ open class MahjongInstance(
                 player = player,
                 winnings = winnings,
                 winningTile = discardTile,
+                fu = fu,
                 score = score,
-                type = MahjongRenderer.WinningType.RON,
-                getHan = {
-                    getHan(
-                        instance = this@MahjongInstance,
-                        player = player,
-                        winningStructure = winningStructure,
-                        isTsumo = false
-                    )
-                }
-            )
+                winningType = winningType,
+                winningBy = MahjongRenderer.WinningBy.RON
+            ) {
+                getHan(
+                    instance = this@MahjongInstance,
+                    player = player,
+                    winningStructure = winningStructure,
+                    isTsumo = false
+                )
+            }
         }
 
 
@@ -1343,7 +1488,7 @@ open class MahjongInstance(
     }
 
     fun checkKuigaeTiles(player: PlayerInstance, call: Call): Job {
-        if (!settings.allowKuigae) return scope.launch {}
+        if (settings.allowKuigae) return scope.launch {}
         val kuigaeTiles = player.getKuigaeTiles(call)
         this.kuigaeTiles.addAll(kuigaeTiles)
 
@@ -1372,17 +1517,31 @@ open class MahjongInstance(
         // continuablePlayers: 和了したプレイヤー、または流局時に聴牌していたプレイヤー
 
         val maxScore = players.maxOf { it.score }
+        val maxScorePlayers = players.filter { it.score == maxScore }
 
         val seats = settings.playerSettings.seats
 
         // 現在の局番号(round)から、これまでに場風が変わった回数を求める（round は 1 始まりで「seats局/1場」）
         val windChangeCount = (round - 1) / seats
-        val isLastWind = windChangeCount >= settings.battleType.roundsOfWindChange
+        val isLast = windChangeCount == settings.battleType.roundsOfWindChange && round % seats == 0
 
-        // 終局判定は連荘/親流れとは独立に評価する
+        // 親が continuablePlayers に含まれる場合は連荘
+        val dealerContinues = continuablePlayers.any { it.position == dealerPosition }
+
+        // 終局判定
         val endGame = when {
-            // 規定の場（EAST_ONLY/EAST_SOUTH/FULL）の最終場に居て、トップが終了点以上なら終了
-            isLastWind -> maxScore >= settings.endScore
+            // 規定の場の最終場に居て、トップが親+終了点以上で尚且つ連荘する場合は終了
+            isLast -> {
+                if (maxScore >= settings.endScore) {
+                    if (dealerContinues) {
+                        maxScorePlayers.size == 1 && maxScorePlayers.first().position == dealerPosition
+                    } else {
+                        true
+                    }
+                } else {
+                    false
+                }
+            }
 
             // 規定場を超えて延長中（= さらに場風が進んだ後）
             windChangeCount > settings.battleType.roundsOfWindChange -> {
@@ -1401,10 +1560,6 @@ open class MahjongInstance(
         if (endGame) {
             return Phase.End
         }
-
-        // 親が continuablePlayers に含まれる、または聴牌者がいない場合は連荘
-        val dealerContinues = continuablePlayers.any { it.position == dealerPosition } ||
-                continuablePlayers.isEmpty()
 
         if (dealerContinues) {
             continueCount++
@@ -1442,8 +1597,7 @@ open class MahjongInstance(
         val currentIndex = players.indexOfFirst { it.position == turn }
         val nextIndex = (currentIndex + 1) % players.size
         val nextPlayer = players[nextIndex]
-        turn = nextPlayer.position
-        turnPlayer = nextPlayer
+        setTurnPlayer(nextPlayer)
     }
 
 

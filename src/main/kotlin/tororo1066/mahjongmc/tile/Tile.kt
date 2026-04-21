@@ -16,6 +16,8 @@ class Tile(
 
     val uuid: UUID = UUID.randomUUID()
 
+    var hovered: Boolean = false
+
     constructor(): this(TileType.HONORS, 0)
 
     companion object {
@@ -67,6 +69,10 @@ class Tile(
                 base + number - 1
             }
         }
+    }
+
+    fun isWind(): Boolean {
+        return type == TileType.HONORS && honor.isWind()
     }
 
     fun isTermsOrHonors(): Boolean {

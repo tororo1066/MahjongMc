@@ -22,7 +22,7 @@ object Pinfu: AbstractOneWinning() {
         // 面子が全て順子であることを確認
         if (winningStructure.winningTiles.melds.any { meld -> meld is Meld.Sequence }) return false
         // 雀頭が役牌・場風・自風でないことを確認
-        val head = winningStructure.winningTiles.heads.first()
+        val head = winningStructure.winningTiles.heads.firstOrNull() ?: return false
         if (head.type == TileType.HONORS) {
             if (head.honor.isDragon()) return false
             val position = head.honor.getPosition() ?: return false
